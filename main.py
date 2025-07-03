@@ -1,9 +1,16 @@
 # 必要なライブラリをインポート
 import logging
-from fastapi import FastAPI, HTTPException
+import os
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Security, Depends
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, HttpUrl
 from pytube import YouTube
 from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound
+
+# --- 環境変数の読み込み ---
+# .envファイルから環境変数を読み込む
+load_dotenv()
 
 # ---　ログ設定　---
 # ログレベルを設定 (INFO, DEBUG, WARNING, ERROR, CRITICAL)
@@ -19,6 +26,26 @@ app = FastAPI(
     description="指定されたYouTube動画のメタデータと文字起こしを取得するAPIです。",
     version="1.0.0",
 )
+
+# --- APIキー認証の設定 ---
+# 環境変数からAPIキーを取得
+API_KEY = os.getenv("API_KEY")
+API_KEY_NAME = "X-API-KEY" # リクエストヘッダーに含めるキーの名前
+api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+
+async def verify_api_key(x_api_key: str = Security(api_key_header)):
+    """APIキーを検証する依存関係関数"""
+    if not API_KEY:
+        logger.error("環境変数 'API_KEY' が設定されていません。")
+        raise HTTPException(status_code=500, detail="サーバー側でAPIキーが設定されていません。")
+    if x_api_key == API_KEY:
+        return x_api_key
+    else:
+        logger.warning(f"無効なAPIキーが使用されました: '{x_api_key}'")
+        raise HTTPException(
+            status_code=403,
+            detail="Could not validate credentials",
+        )
 
 # ---　データモデルの定義 (Pydanticを使用)　---
 # これにより、リクエストとレスポンスのデータ型が保証される
@@ -52,7 +79,8 @@ def read_root():
     return {"message": "YouTube動画情報取得APIへようこそ"}
 
 # 動画情報取得エンドポイント
-@app.post("/api/v1/summary", response_model=VideoResponse)
+# dependencies=[Depends(verify_api_key)] を追加して、このエンドポイントをAPIキーで保護する
+@app.post("/api/v1/summary", response_model=VideoResponse, dependencies=[Depends(verify_api_key)])
 def get_summary(request: VideoRequest):
     """
     YouTube動画のURLを受け取り、動画のメタデータと文字起こしを返します。
