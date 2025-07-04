@@ -9,7 +9,7 @@ from pydantic import BaseModel, HttpUrl
 import requests
 from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound
 import secrets
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlunparse
 import urllib.error
 from requests.exceptions import HTTPError as RequestsHTTPError
 
@@ -109,7 +109,8 @@ def get_summary(request: VideoRequest, _: str = Depends(verify_api_key)):
             video_id = qs.get("v", [None])[0]
         if not video_id:
             raise ValueError("動画IDを取得できませんでした。URLを確認してください。")
-        video_url = f"https://www.youtube.com/watch?v={video_id}"
+        # URL再構築
+        video_url = urlunparse(("https", "www.youtube.com", f"/watch?v={video_id}", "", "", ""))
     except Exception as parse_err:
         logger.warning(f"URL解析に失敗しました: {request.url} : {parse_err}")
         raise HTTPException(status_code=400, detail="無効なYouTube URL 形式です。")
@@ -117,7 +118,6 @@ def get_summary(request: VideoRequest, _: str = Depends(verify_api_key)):
     logger.info(f"処理開始: URL = {video_url}")
 
     try:
-        # --- 1. pytubeを使って動画のメタデータを取得 ---
         # --- 1. oEmbed APIを使って動画のメタデータを取得 ---
         logger.debug("oEmbed API によるメタデータ取得を開始...")
         oembed_url = f"https://www.youtube.com/oembed?url={video_url}&format=json"
@@ -129,7 +129,6 @@ def get_summary(request: VideoRequest, _: str = Depends(verify_api_key)):
         logger.debug(f"動画タイトル: {video_title}")
 
         # --- 2. youtube-transcript-apiを使って文字起こしを取得 ---
-        video_id = video_url.split("v=")[1]
         logger.debug(f"youtube-transcript-apiによる文字起こし取得を開始... (Video ID: {video_id})")
         # 日本語、または英語の文字起こしを試みる
         transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['ja', 'en'])
