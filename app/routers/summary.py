@@ -9,7 +9,7 @@ import urllib.error
 from requests.exceptions import HTTPError as RequestsHTTPError
 
 from fastapi import APIRouter, Depends, HTTPException
-from youtube_transcript_api import NoTranscriptFound
+from youtube_transcript_api import NoTranscriptFound, YouTubeRequestFailed
 
 # --- アプリケーション内モジュールのインポート ---
 from app.models.schemas import VideoRequest, VideoResponse
@@ -47,6 +47,20 @@ async def get_summary(request: VideoRequest, _: str = Depends(verify_api_key)):
     except NoTranscriptFound:
         logger.warning(f"文字起こしが見つかりませんでした: {video_url}")
         raise HTTPException(status_code=404, detail="この動画には利用可能な文字起こしがありません。")
+
+    except YouTubeRequestFailed as e:
+        logger.error(f"YouTubeへのリクエストがレート制限またはその他の理由で失敗しました: {e}", exc_info=True)
+        # エラーメッセージに '429' が含まれるかチェックし、レート制限エラーかどうかを判断
+        if "429" in str(e):
+            raise HTTPException(
+                status_code=429, 
+                detail="現在、YouTube APIへのリクエストが大変混み合っています。しばらく時間をおいてから再度お試しください。"
+            )
+        # 429以外のYouTube関連エラー
+        raise HTTPException(
+            status_code=503, 
+            detail="YouTubeへの接続中に問題が発生しました。動画が利用できないか、一時的なネットワークの問題の可能性があります。"
+        )
     
     except (urllib.error.HTTPError, RequestsHTTPError) as http_err:
         logger.warning(f"YouTube / oEmbed API から HTTPError が返されました: {http_err}")
