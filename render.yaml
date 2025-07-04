@@ -1,0 +1,30 @@
+# render.yaml
+
+# RenderでWebサービスを定義するための設定ファイル
+# 参考: https://render.com/docs/blueprint-spec
+
+services:
+  # Webサービスの定義
+  - type: web
+    # サービス名 (Renderのダッシュボードで表示される)
+    name: youtube-summary-api
+    # ランタイム環境
+    runtime: python
+    # サービスのリージョン
+    region: oregon
+    # ビルド時に実行されるコマンド
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    # サーバーを起動するコマンド
+    # RenderはPORT環境変数を自動で設定してくれるので、それにバインドする
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    # 環境変数の設定
+    envVars:
+      # Pythonのバージョンを指定
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      # APIキーはRenderのダッシュボードから安全に設定する
+      # ここではキーの存在のみを定義し、値は設定しない
+      - key: API_KEY
+        # sync: false にすると、ダッシュボードで設定した値が
+        # このファイルで上書きされるのを防ぐ
+        sync: false
