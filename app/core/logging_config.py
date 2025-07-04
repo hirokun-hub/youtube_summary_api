@@ -13,7 +13,8 @@ def setup_logging():
     ログレベルは環境変数 'LOG_LEVEL' から取得し、デフォルトは 'INFO' です。
     """
     # 環境変数からログレベルを取得。指定がなければ 'INFO' を使用。
-    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+    # 一時的にデバッグレベルに固定
+    log_level = "DEBUG"
     
     # 文字列のログレベルを logging の定数に変換
     numeric_level = getattr(logging, log_level, logging.INFO)
