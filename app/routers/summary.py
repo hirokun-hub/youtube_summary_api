@@ -9,7 +9,8 @@ import urllib.error
 from requests.exceptions import HTTPError as RequestsHTTPError
 
 from fastapi import APIRouter, Depends, HTTPException
-from youtube_transcript_api import NoTranscriptFound, YouTubeRequestFailed
+from youtube_transcript_api import NoTranscriptFound
+from youtube_transcript_api.errors import YouTubeRequestFailed
 
 # --- アプリケーション内モジュールのインポート ---
 from app.models.schemas import VideoRequest, VideoResponse
