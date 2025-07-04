@@ -63,7 +63,4 @@ async def get_summary(request: VideoRequest, _: str = Depends(verify_api_key)):
         logger.warning(f"入力値または処理中にエラーが発生: {ve} | URL: {video_url}")
         raise HTTPException(status_code=400, detail=str(ve))
 
-    except Exception as e:
-        # 予期せぬサーバー内部のエラー
-        logger.error(f"ルーター層で予期せぬエラーが発生しました: {video_url}", exc_info=True)
-        raise HTTPException(status_code=500, detail="内部サーバーエラーが発生しました。")
+

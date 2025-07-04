@@ -17,7 +17,8 @@ load_dotenv(dotenv_path=env_path)
 
 
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 # --- アプリケーション内モジュールのインポート ---
 # core/logging_config.py からロギング設定関数をインポート
@@ -38,6 +39,23 @@ app = FastAPI(
     description="YouTube動画のメタデータと文字起こしを取得するためのAPIです。",
     version="1.1.0",
 )
+
+# --- グローバル例外ハンドラの登録 ---
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    """
+    予期せぬすべての例外をキャッチし、詳細をログに出力するグローバルハンドラ。
+    これにより、デバッグが容易になり、クライアントには一貫したエラーメッセージを返す。
+    """
+    # エラーの詳細（スタックトレースを含む）をログに出力
+    logger.error(f"リクエスト処理中にハンドルされていない例外が発生しました: {exc}", exc_info=True)
+    
+    # クライアントには汎用的なエラーメッセージを返す
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "内部処理中に予期せぬエラーが発生しました。"},
+    )
+
 
 # --- APIルーターの登録 ---
 logger.debug("APIルーターを登録します。")
