@@ -11,7 +11,29 @@ tags:
 # [[Render]]へのデプロイ手順書
 
 このドキュメントは、`youtube-summary-api` を [[Render]] にデプロイするための手順をまとめたものです。
-プロジェクトルートにある `render.yaml` ファイル（[[Infrastructure as Code]]）を利用して、簡単かつ再現性の高いデプロイを行います。
+
+---
+
+## 🚩 無料枠（Free Tier）での手動デプロイ手順（おすすめ）
+
+Blueprint（render.yaml）を使わず、RenderのWeb UIから「New Web Service」を作成してデプロイする方法です。**クレジットカード不要＆無料枠で試せます。**
+
+### 手順
+1. [Renderダッシュボード](https://dashboard.render.com/) にログイン
+2. 左メニューから「Web Services」または「+ New」→「Web Service」を選択
+3. GitHubリポジトリを連携し、`hirokun-hub/youtube_summary_api` を選択
+   - ブランチは `refactor/low-hanging-improvements` を選択
+4. サービス名などを入力し、Python環境を選択
+5. **Build Command**: `pip install --upgrade pip && pip install -r requirements.txt`
+6. **Start Command**: `uvicorn main:app --host 0.0.0.0 --port 10000`
+   - ポート番号はRenderの指示に従ってください（`$PORT`など自動設定の場合もあり）
+7. 「Environment」セクションで `API_KEY` を追加（必須）
+8. 「Create Web Service」でデプロイ開始
+
+> [!TIP]
+> render.yamlはこの手動方式では不要です。
+
+---
 
 ## 準備するもの
 
