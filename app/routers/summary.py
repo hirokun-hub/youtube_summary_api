@@ -5,83 +5,47 @@
 """
 
 import logging
-import urllib.error
-from requests.exceptions import HTTPError as RequestsHTTPError
 
-from fastapi import APIRouter, Depends, HTTPException
-from youtube_transcript_api import (
-    NoTranscriptFound,
-    YouTubeRequestFailed,
-    YouTubeTranscriptApiException,
-)
+from fastapi import APIRouter, Depends
 
 # --- アプリケーション内モジュールのインポート ---
-from app.models.schemas import VideoRequest, VideoResponse
-from app.services.youtube import get_video_details
+from app.models.schemas import VideoRequest, SummaryResponse
+from app.services.youtube import get_summary_data
 from app.core.security import verify_api_key
 
 # このモジュール用のロガーを設定
 logger = logging.getLogger(__name__)
 
 # APIRouterインスタンスを作成
-# これにより、このファイル内のエンドポイントを後でメインのFastAPIアプリに結合できる
 router = APIRouter(
-    prefix="/api/v1",  # このルーターの全エンドポイントに共通のパスプレフィックス
-    tags=["Summary"],  # Swagger UIでのグルーピング用タグ
+    prefix="/api/v1",
+    tags=["Summary"],
 )
 
 
-@router.post("/summary", response_model=VideoResponse)
+@router.post("/summary", response_model=SummaryResponse)
 async def get_summary(request: VideoRequest, _: str = Depends(verify_api_key)):
     """
     YouTube動画のURLを受け取り、動画のメタデータと文字起こしを返します。
-    ビジネスロジックはサービス層 (app.services.youtube) に委譲します。
+    
+    サービス層(`app.services.youtube`)がビジネスロジックを担当し、
+    成功・失敗にかかわらず、常に`SummaryResponse`形式で結果を返します。
 
     - **request**: `VideoRequest`モデル。`url`キーにYouTubeのURLを含むJSON。
-    - **return**: `VideoResponse`モデル。動画情報を含むJSON。
+    - **return**: `SummaryResponse`モデル。処理結果と動画情報を含むJSON。
     """
     video_url = str(request.url)
     logger.info(f"APIリクエスト受信: {video_url}")
-    try:
-        # サービス層の関数を呼び出して、ビジネスロジックを実行
-        response_data = get_video_details(video_url=video_url)
-        logger.info(f"処理成功: {response_data.title}")
-        return response_data
 
-    except YouTubeTranscriptApiException as e:
-        logger.warning(f"YouTube Transcript APIからエラーが返されました: {e}", exc_info=True)
-
-        if isinstance(e, NoTranscriptFound):
-            raise HTTPException(status_code=404, detail="この動画には利用可能な文字起こしがありません。")
-
-        if isinstance(e, YouTubeRequestFailed):
-            if "429" in str(e):
-                raise HTTPException(
-                    status_code=429,
-                    detail="現在、YouTube APIへのリクエストが大変混み合っています。しばらく時間をおいてから再度お試しください。"
-                )
-            else:
-                raise HTTPException(
-                    status_code=503,
-                    detail="YouTubeへの接続中に問題が発生しました。動画が利用できないか、一時的なネットワークの問題の可能性があります。"
-                )
-
-        # その他のYouTubeTranscriptApiExceptionをキャッチ
-        raise HTTPException(status_code=500, detail="文字起こしの取得中に予期せぬYouTube関連のエラーが発生しました。")
+    # サービス層の関数を呼び出し、結果をそのまま返す
+    # エラーハンドリングはサービス層に集約されている
+    response_data = get_summary_data(video_url=video_url)
     
-    except (urllib.error.HTTPError, RequestsHTTPError) as http_err:
-        logger.warning(f"YouTube / oEmbed API から HTTPError が返されました: {http_err}")
-        # エラーレスポンスからステータスコードを慎重に抽出
-        status_code = getattr(http_err, 'code', None)
-        if status_code is None and hasattr(http_err, 'response') and http_err.response is not None:
-            status_code = http_err.response.status_code
-        # ステータスコードが取得できない場合は、汎用的な400エラーとする
-        final_status = status_code or 400
-        raise HTTPException(status_code=final_status, detail=f"YouTube から {final_status} エラーが返されました。動画が存在しないか、制限されている可能性があります。")
+    if response_data.success:
+        logger.info(f"処理成功: {response_data.title}")
+    else:
+        logger.warning(f"処理失敗: {response_data.message} | URL: {video_url}")
 
-    except ValueError as ve:
-        # サービス層で発生したバリデーションエラーや、その他のハンドリングされたエラー
-        logger.warning(f"入力値または処理中にエラーが発生: {ve} | URL: {video_url}")
-        raise HTTPException(status_code=400, detail=str(ve))
+    return response_data
 
 

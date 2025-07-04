@@ -5,7 +5,7 @@
 リクエストとレスポンスの型ヒントやバリデーションに使用されます。
 """
 
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, Field
 
 # --- リクエストモデル ---
 
@@ -16,43 +16,36 @@ class VideoRequest(BaseModel):
     # HttpUrl型を使うことで、URLが正しい形式か自動でバリデーションされる
     url: HttpUrl
 
-    # Pydanticモデルの設定
-    class Config:
-        # ドキュメント用にモデルの例を定義
-        json_schema_extra = {
+    # Pydantic v2では model_config を使用
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
             }
         }
+    }
 
 # --- レスポンスモデル ---
 
-class VideoResponse(BaseModel):
-    """
-    APIからのレスポンスとして返すデータ構造を定義します。
-    """
-    title: str
-    channel_name: str
-    video_url: str
-    upload_date: str
-    view_count: int
-    # like_countとsubscriber_countは安定して取得できないため、オプショナル(None許容)とする
-    like_count: int | None
-    subscriber_count: int | None
-    transcript: str
+class SummaryResponse(BaseModel):
+    """APIのレスポンスとして返すYouTubeの情報"""
+    success: bool = Field(..., description="処理が成功したかどうか")
+    message: str = Field(..., description="処理結果のメッセージ")
+    title: str | None = Field(None, description="動画のタイトル")
+    channel_name: str | None = Field(None, description="チャンネル名")
+    transcript: str | None = Field(None, description="取得した文字起こし全文")
 
-    # Pydanticモデルの設定
-    class Config:
-        # ドキュメント用にモデルの例を定義
-        json_schema_extra = {
-            "example": {
-                "title": "Rick Astley - Never Gonna Give You Up (Official Music Video)",
-                "channel_name": "Rick Astley",
-                "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-                "upload_date": "N/A",
-                "view_count": 0,
-                "like_count": None,
-                "subscriber_count": None,
-                "transcript": "[00:00] We're no strangers to love\n[00:04] You know the rules and so do I..."
-            }
+    # Pydantic v2では model_config を使用
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "success": True,
+                    "message": "Successfully retrieved data.",
+                    "title": "Rick Astley - Never Gonna Give You Up (Official Music Video)",
+                    "channel_name": "Rick Astley",
+                    "transcript": "We're no strangers to love..."
+                }
+            ]
         }
+    }
