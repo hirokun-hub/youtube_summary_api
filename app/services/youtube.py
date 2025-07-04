@@ -11,7 +11,12 @@ import requests
 import urllib.error
 from urllib.parse import urlunparse
 from requests.exceptions import HTTPError as RequestsHTTPError
-from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound
+from youtube_transcript_api import (
+    YouTubeTranscriptApi,
+    NoTranscriptFound,
+    YouTubeTranscriptApiException,
+    YouTubeRequestFailed,
+)
 
 from app.models.schemas import VideoResponse
 
@@ -125,9 +130,10 @@ def get_video_details(video_url: str) -> VideoResponse:
         return response_data
 
     # 各種例外を補足し、呼び出し元（ルーター）に情報を伝播させる
-    except NoTranscriptFound:
-        logger.warning(f"文字起こしが見つかりませんでした: {video_url}")
-        raise # 例外をそのまま再送出
+    except (NoTranscriptFound, YouTubeTranscriptApiException) as yta_err:
+        # youtube-transcript-api が投げる既知の例外はそのまま上位へ伝播させる
+        logger.warning(f"youtube-transcript-api 例外を捕捉: {yta_err} | URL: {video_url}")
+        raise
     
     except (urllib.error.HTTPError, RequestsHTTPError) as http_err:
         logger.warning(f"YouTube / oEmbed API から HTTPError が返されました: {http_err}")
