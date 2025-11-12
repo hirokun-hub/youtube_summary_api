@@ -56,20 +56,22 @@
 14. WHEN Docker_Composeが起動するとき、THE System SHALL Tailscale_Containerに`ports: ["127.0.0.1:10000:10000"]`を設定し、ホストのループバックインターフェース（localhost）のみからFastAPIへアクセス可能にする
 15. WHEN 開発者がTailnetネットワーク内の別デバイスからTailscale IPアドレス経由でAPIにアクセスしたとき、THE System SHALL HTTPリクエストを正常に処理し、レスポンスを返す
 
-### 要件3: 設定の一元管理
+### 要件3: 設定の一元管理と機密値の分離
 
-**ユーザーストーリー:** 開発者として、環境変数を一箇所で管理したい。そうすることで、設定変更時の手間を減らし、設定ミスを防ぎたい。
+**ユーザーストーリー:** 開発者として、環境変数を一箇所で管理し、かつ機密値を安全に扱いたい。そうすることで、設定変更時の手間を減らし、設定ミスを防ぎ、機密情報の漏洩リスクを最小化したい。
 
 #### 受入基準
 
-1. THE System SHALL `.env.example`ファイルをルートディレクトリに配置し、すべての必須環境変数をコメント付きで列挙する
-2. THE System SHALL `.env.example`に以下の環境変数を含める: API_KEY, LOG_LEVEL, TAILSCALE_AUTH_KEY, TAILSCALE_HOSTNAME, GEMINI_API_KEY（将来用）
-3. THE System SHALL `.env.example`の各環境変数に用途と設定例をコメントで説明する
-4. WHEN 開発者が新規環境を構築するとき、THE System SHALL `.env.example`をコピーして`.env`を作成する手順をREADMEに記載する
-5. WHEN Docker_Composeが起動するとき、THE System SHALL `env_file: .env`設定により`.env`ファイルを読み込み、すべてのコンテナに環境変数を提供する
-6. WHEN Docker_Composeが起動するとき、THE System SHALL Tailscale関連環境変数（TAILSCALE_AUTH_KEY, TAILSCALE_HOSTNAME等）をTailscale_Containerの`environment`セクションに渡す
-7. WHEN FastAPI_Containerが起動するとき、THE System SHALL `main.py`の`load_dotenv()`により`.env`ファイルを読み込み、既存の環境変数取得ロジック（`os.getenv`）を変更せずに利用する
-8. THE System SHALL `.gitignore`に`.env`を含め、機密情報をバージョン管理から除外する
+1. THE System SHALL `.env.example`ファイルをルートディレクトリに配置し、共有可能な環境変数のみをコメント付きで列挙する
+2. THE System SHALL `.env.example`に以下の共有可能な環境変数を含める: LOG_LEVEL, TAILSCALE_HOSTNAME
+3. THE System SHALL `.env.example`に機密値（API_KEY, TAILSCALE_AUTH_KEY, GEMINI_API_KEY）のプレースホルダーをコメントで記載し、「`.env.local`で設定すること」と明記する
+4. THE System SHALL `.env.local`ファイルを機密値専用ファイルとして定義し、API_KEY, TAILSCALE_AUTH_KEY, GEMINI_API_KEY（将来用）などの環境ごとに異なる値を管理する
+5. THE System SHALL `.env.example`と`.env.local`の各環境変数に用途と設定例をコメントで説明する
+6. WHEN 開発者が新規環境を構築するとき、THE System SHALL READMEに以下の手順を記載する: 「`.env.example`を`.env`へコピー→`.env.local`を作成してAPI_KEY/GEMINI_API_KEY/TAILSCALE_AUTH_KEYなどの機密値を記入」
+7. WHEN Docker_Composeが起動するとき、THE System SHALL `env_file`に`.env`と`.env.local`の両方を指定し、`.env.local`が存在しない環境では`.env`のみで動作するフォールバックを許可する
+8. WHEN Docker_Composeが起動するとき、THE System SHALL Tailscale関連環境変数（TAILSCALE_AUTH_KEY, TAILSCALE_HOSTNAME等）をTailscale_Containerの`environment`セクションに渡す
+9. WHEN FastAPI_Containerが起動するとき、THE System SHALL `main.py`の`load_dotenv()`により`.env`と`.env.local`ファイルを読み込み、既存の環境変数取得ロジック（`os.getenv`）を変更せずに利用する
+10. THE System SHALL `.gitignore`に`.env`と`.env.local`を含め、機密情報をバージョン管理から除外する（現状`.env`は既に含まれているが、`.env.local`を追加する必要がある）
 
 ### 要件4: Dockerファイルの構成
 
@@ -83,9 +85,9 @@
 4. WHEN `docker/Dockerfile.api`がビルドされるとき、THE System SHALL アプリケーションコード（`main.py`, `app/`ディレクトリ）をコンテナにコピーする
 5. WHEN `docker/Dockerfile.api`がビルドされるとき、THE System SHALL ENTRYPOINTまたはCMDに`uvicorn main:app --host 0.0.0.0 --port 10000`を設定する
 6. THE System SHALL `docker/Dockerfile.tailscale`を作成し、`tailscale/tailscale`公式イメージをベースとして使用する
-7. WHEN `docker/Dockerfile.tailscale`がビルドされるとき、THE System SHALL ENTRYPOINTまたはCMDに`tailscaled`の起動と`tailscale up`の実行を含むスクリプトを設定する
-8. WHEN `docker/Dockerfile.tailscale`のコンテナが起動するとき、THE System SHALL 環境変数`TAILSCALE_AUTH_KEY`と`TAILSCALE_HOSTNAME`を使用して`tailscale up --authkey $TAILSCALE_AUTH_KEY --hostname $TAILSCALE_HOSTNAME`を実行する
-9. WHERE `docker-compose.yml`でTailscale_Containerを定義する場合、THE System SHALL `command`セクションで`tailscaled`起動と`tailscale up`実行を明文化する
+7. WHEN `docker/Dockerfile.tailscale`がビルドされるとき、THE System SHALL ENTRYPOINTまたはCMDに`tailscaled`の起動と、要件2 AC5-10で定義された条件付き`tailscale up`実行ロジックを含むスクリプトを設定する
+8. WHEN `docker/Dockerfile.tailscale`のコンテナが起動するとき、THE System SHALL 起動スクリプト内で要件2 AC5-10の判定（既存認証状態の確認、`tailscale status`の結果に基づく条件分岐）を実施する
+9. WHERE `docker-compose.yml`でTailscale_Containerを定義する場合、THE System SHALL `command`セクションで`tailscaled`起動と、条件付き`tailscale up`実行ロジックを実装するコンテナスクリプトを呼び出す
 
 ### 要件5: 既存バッチファイルの移行管理
 
@@ -131,11 +133,12 @@
 
 ### セキュリティ
 
-1. THE System SHALL `.env`ファイルをバージョン管理から除外し、機密情報の漏洩を防ぐ
-2. THE System SHALL API_KEYが未設定の場合、`app/core/security.py`の既存ロジックによりエラーログを出力する
-3. THE System SHALL Tailscale_Containerに最小限の権限（NET_ADMIN, NET_RAW）のみを付与する
-4. THE System SHALL ポートマッピングを`127.0.0.1:10000:10000`に限定し、ホスト外部からの直接アクセスを防ぐ
-5. THE System SHALL Tailnet経由のアクセスのみを許可し、Issue #2の「Tailnet外公開はやめる」方針に準拠する
+1. THE System SHALL `.env`と`.env.local`ファイルをバージョン管理から除外し、機密情報の漏洩を防ぐ
+2. THE System SHALL 機密値（API_KEY, TAILSCALE_AUTH_KEY, GEMINI_API_KEY）を`.env.local`または本番環境ではSecrets Managerに保存し、`.env`は共有可能なテンプレートのみとする
+3. THE System SHALL API_KEYが未設定の場合、`app/core/security.py`の既存ロジックによりエラーログを出力する
+4. THE System SHALL Tailscale_Containerに最小限の権限（NET_ADMIN, NET_RAW）のみを付与する
+5. THE System SHALL ポートマッピングを`127.0.0.1:10000:10000`に限定し、ホスト外部からの直接アクセスを防ぐ
+6. THE System SHALL Tailnet経由のアクセスのみを許可し、Issue #2の「Tailnet外公開はやめる」方針に準拠する
 
 ### 保守性
 
@@ -185,22 +188,27 @@
 - `tailscale status`が失敗または未接続の場合は、ACL改訂やキー失効などの障害から自動復旧するため`tailscale up`を再実行
 - Tailscaleの認証キーはデフォルトでsingle-use（一回限り）のため、毎回実行すると2回目以降の起動に失敗する
 - 認証状態の永続化により、コンテナ再起動時も再認証不要で運用可能
+- この条件付き実行ロジックは、要件4で定義されるDockerfile/Composeの実装においても一貫して適用される
 
 **排除した代替案:**
-- **毎回tailscale upを実行**: single-use Auth Keyの場合、初回起動後にキーが失効し、2回目以降の起動に失敗する。運用上不可能
+- **毎回tailscale upを実行**: single-use Auth Keyの場合、初回起動後にキーが失効し、2回目以降の起動に失敗する。運用上不可能。要件4でこの方針を採用すると要件2と矛盾し、実装方針が二重定義される
 - **手動実行**: コンテナ起動後に手動で`tailscale up`を実行する方法は、自動化の観点から不適切
 - **再利用可能キーの強制**: 管理者に再利用可能なAuth Keyの発行を強制する方法も可能だが、デフォルト設定で動作する方が望ましい。ただし、移行時の注意事項に「再利用可能キーの推奨」を記載
 - **tailscale statusのみでスキップ**: 状態ファイルが残っていても`tailscale status`が失敗するケース（ACL改訂、キー失効等）で再接続できず、APIが孤立する。障害復旧ができないため不採用
 
-### 決定事項3: 環境変数のテンプレート化
+### 決定事項3: 環境変数のテンプレート化と機密値の分離
 
 **採用理由:**
-- `.env.example`にすべての環境変数を列挙することで、新規環境構築時の手順が明確化
+- `.env.example`に共有可能な環境変数のみを列挙し、機密値は`.env.local`で管理することで、「使い回せる設定」と「使い回せない秘密情報」を明確に分離
+- `.env.local`が存在しない環境では`.env`のみで動作するフォールバックにより、CI/CDでの柔軟な運用が可能
+- 本番環境ではSecrets Manager経由で機密値を注入できるため、設定ファイルに秘密情報を含めない運用が実現可能
 - `TAILSCALE_HOSTNAME`等をハードコードせず、環境変数で管理することで、複数環境での再現性が向上
 
 **排除した代替案:**
 - **Dockerfileへのハードコード**: ホスト名等を`Dockerfile`に直接記述する方法は、環境ごとにDockerfileを変更する必要があり、保守性が低下
 - **JSON/YAML設定ファイル**: 既存の`load_dotenv`実装と整合しないため、環境変数ベースの管理を継続
+- **`.env`をそのまま本番・開発共用で使う**: すべての環境でファイルをコピーし直す必要があり、キー漏洩リスクも高い。機密値と共有値が混在するため不採用
+- **機密値を`.env.example`に含める**: テンプレートに機密値が混在すると、環境間で使い回してはいけない値まで同列に扱ってしまう。セキュリティリスクが高いため不採用
 
 ## 移行時の注意事項
 
@@ -239,9 +247,15 @@
    - `docker compose logs -f tailscale`: Tailscaleのログをリアルタイム表示
    - `docker compose exec tailscale tailscale status`: Tailnet接続状態の確認
 
-8. **環境変数の設定例**
-   - `.env.example`に記載されたすべての環境変数を`.env`にコピーし、適切な値を設定
+8. **環境変数の設定手順**
+   - `.env.example`を`.env`にコピーし、共有可能な設定値を確認
+   - `.env.local`を新規作成し、機密値（API_KEY, TAILSCALE_AUTH_KEY, GEMINI_API_KEY）を記入
    - 特に`TAILSCALE_AUTH_KEY`と`TAILSCALE_HOSTNAME`は必須
+   - `.env.local`は`.gitignore`に含まれており、バージョン管理されない
+
+9. **CI/CDでの機密値管理**
+   - 本番環境では`.env.local`の代わりにSecrets Manager（GitHub Secrets, AWS Secrets Manager等）から機密値を注入
+   - `.env`は共有可能なテンプレートとして、CI/CDパイプラインで参照可能
 
 ## 参照ドキュメント
 
