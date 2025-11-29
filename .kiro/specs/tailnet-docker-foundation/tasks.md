@@ -8,28 +8,33 @@
 
 ### 1. プロジェクト構造の準備
 
-- [ ] 1.1 `docker/`ディレクトリを作成する
+- [x] 1.1 `docker/`ディレクトリを作成する
   - ルートディレクトリに`docker/`フォルダを作成
   - _要件: 4.1_
 
-- [ ] 1.2 `.env.example`ファイルを作成する
+- [x] 1.2 `.env.example`ファイルを作成する
   - 共有可能な環境変数（LOG_LEVEL, TAILSCALE_HOSTNAME）を記載
   - 機密値のプレースホルダーをコメントで記載
   - 各環境変数の用途と設定例をコメントで説明
   - _要件: 3.1, 3.2, 3.3, 3.5_
 
-- [ ] 1.3 `.gitignore`に`.env.local`を追加する
+- [x] 1.3 `.gitignore`に`.env.local`を追加する
   - 既存の`.env`に加えて`.env.local`を追加
   - _要件: 3.10_
 
+- [ ] 1.4 `.dockerignore`ファイルを作成する
+  - `.venv`, `.git`, `docs/`, `__pycache__`, `*.md`（README.mdを除く）等を除外
+  - ビルド時間短縮とイメージサイズ削減のため
+  - _要件: 4.10_
+
 ### 2. 環境変数の設定
 
-- [ ] 2.1 `.env`ファイルを作成する
+- [x] 2.1 `.env`ファイルを作成する
   - `.env.example`をコピーして`.env`を作成
   - LOG_LEVEL, TAILSCALE_HOSTNAMEを設定
   - _要件: 3.4_
 
-- [ ] 2.2 `.env.local`ファイルを作成する
+- [x] 2.2 `.env.local`ファイルを作成する
   - API_KEY, TAILSCALE_AUTH_KEY, GEMINI_API_KEYを設定
   - Tailscaleダッシュボードから認証キーを取得（再利用可能オプション推奨）
   - _要件: 3.4, 3.6_

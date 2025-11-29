@@ -88,6 +88,7 @@
 7. WHEN `docker/Dockerfile.tailscale`がビルドされるとき、THE System SHALL ENTRYPOINTまたはCMDに`tailscaled`の起動と、要件2 AC5-10で定義された条件付き`tailscale up`実行ロジックを含むスクリプトを設定する
 8. WHEN `docker/Dockerfile.tailscale`のコンテナが起動するとき、THE System SHALL 起動スクリプト内で要件2 AC5-10の判定（既存認証状態の確認、`tailscale status`の結果に基づく条件分岐）を実施する
 9. WHERE `docker-compose.yml`でTailscale_Containerを定義する場合、THE System SHALL `command`セクションで`tailscaled`起動と、条件付き`tailscale up`実行ロジックを実装するコンテナスクリプトを呼び出す
+10. THE System SHALL `.dockerignore`ファイルをルートディレクトリに作成し、`.venv`, `.git`, `docs/`, `__pycache__`, `*.md`（README.mdを除く）等のビルド不要ファイルを除外する
 
 ### 要件5: 既存バッチファイルの移行管理
 

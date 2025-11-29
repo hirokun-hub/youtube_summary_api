@@ -117,6 +117,52 @@ networks:
     driver: bridge
 ```
 
+### .dockerignore
+
+```
+# Git
+.git
+.gitignore
+
+# Python
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Documentation (README.mdは含める)
+docs/
+まずバックエンドだけ作る/
+*.md
+!README.md
+
+# Kiro specs
+.kiro/
+
+# Environment files (Docker Composeのenv_fileで読み込むため除外しない)
+# .env
+# .env.local
+
+# Windows batch files
+*.bat
+
+# macOS
+.DS_Store
+
+# Docker
+docker-compose.override.yml
+```
+
 ### docker/Dockerfile.api
 
 ```dockerfile
