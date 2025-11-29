@@ -1,0 +1,22 @@
+# FastAPI用Dockerfile
+# 要件: 4.2, 4.3, 4.4, 4.5
+
+FROM python:3.12-slim
+
+# 作業ディレクトリを設定
+WORKDIR /app
+
+# 依存パッケージをインストール（要件4.3）
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# アプリケーションコードをコピー（要件4.4）
+COPY main.py .
+COPY app/ ./app/
+
+# ポート10000を公開（ドキュメント用、実際はnetwork_mode経由）
+EXPOSE 10000
+
+# Uvicornでアプリケーションを起動（要件4.5）
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
