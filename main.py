@@ -12,8 +12,14 @@
 from pathlib import Path
 from dotenv import load_dotenv
 
+# .envを読み込み（共有可能な設定値）
 env_path = Path('.') / '.env'
 load_dotenv(dotenv_path=env_path)
+
+# .env.localを読み込み（機密値、存在する場合は上書き）
+# override=Trueにより、.envと.env.localで同じキーがある場合は.env.localの値を優先
+env_local_path = Path('.') / '.env.local'
+load_dotenv(dotenv_path=env_local_path, override=True)
 
 
 import logging

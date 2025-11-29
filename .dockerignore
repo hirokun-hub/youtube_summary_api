@@ -1,0 +1,44 @@
+# .dockerignore
+# Dockerビルド時に除外するファイル
+# 要件: 4.10
+
+# Git
+.git
+.gitignore
+
+# Python仮想環境
+.venv
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ドキュメント（README.mdは含める）
+docs/
+まずバックエンドだけ作る/
+*.md
+!README.md
+
+# Kiro specs
+.kiro/
+
+# Windowsバッチファイル
+*.bat
+
+# macOS
+.DS_Store
+
+# Docker関連（ビルドコンテキストに含めない）
+docker-compose.override.yml
+
+# その他
+*.log

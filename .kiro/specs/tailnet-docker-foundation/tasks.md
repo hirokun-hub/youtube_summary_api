@@ -11,7 +11,7 @@
   - [x] 1.3 `.gitignore`に`.env.local`を追加する
     - 既存の`.env`に加えて`.env.local`を追加
     - _要件: 3.10_
-  - [ ] 1.4 `.dockerignore`ファイルを作成する
+  - [x] 1.4 `.dockerignore`ファイルを作成する
     - `.venv`, `.git`, `docs/`, `__pycache__`, `*.md`（README.mdを除く）等を除外
     - _要件: 4.10_
 
@@ -41,29 +41,29 @@
     - `tailscale-entrypoint.sh`をコピーし、実行権限を付与
     - _要件: 4.6, 4.7_
 
-- [ ] 5. Docker Composeファイルの作成
-  - [ ] 5.1 `docker-compose.yml`を作成する
+- [x] 5. Docker Composeファイルの作成
+  - [x] 5.1 `docker-compose.yml`を作成する
     - `tailscale`サービスと`api`サービスを定義
     - `network_mode: "service:tailscale"`を設定
     - `ports: ["127.0.0.1:10000:10000"]`を設定
     - _要件: 1.1, 1.5, 2.1, 2.2, 2.3, 2.4, 2.12, 2.13, 2.14, 3.7, 4.9_
 
-- [ ] 6. main.pyの修正
-  - [ ] 6.1 `main.py`に`.env.local`読み込みを追加する
+- [x] 6. main.pyの修正
+  - [x] 6.1 `main.py`に`.env.local`読み込みを追加する
     - 既存の`.env`読み込み後に`.env.local`を`override=True`で読み込む
     - _要件: 3.9_
 
-- [ ] 7. 既存バッチファイルの非推奨化
-  - [ ] 7.1 既存バッチファイルに非推奨コメントを追加する
+- [x] 7. 既存バッチファイルの非推奨化
+  - [x] 7.1 既存バッチファイルに非推奨コメントを追加する
     - `start_api.bat`, `run_fastapi.bat`, `run_funnel.bat`の冒頭に非推奨コメントを追加
     - _要件: 5.2_
 
-- [ ] 8. ドキュメントの更新
-  - [ ] 8.1 READMEにセットアップ手順を追加する
+- [x] 8. ドキュメントの更新
+  - [x] 8.1 READMEにセットアップ手順を追加する
     - 環境変数の設定手順、Docker Composeによる起動方法を記載
     - _要件: 3.6, 5.4_
 
-- [ ] 9. Checkpoint - すべてのファイルが作成されていることを確認
+- [x] 9. Checkpoint - すべてのファイルが作成されていることを確認
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 10. 動作確認とテスト
