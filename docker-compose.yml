@@ -22,11 +22,17 @@ services:
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    # TUNデバイスへのアクセス（Linux環境用、macOSではTS_USERSPACEで代替）
+    devices:
+      - /dev/net/tun:/dev/net/tun
     # 認証状態とソケットの永続化
     # 要件: 2.3
     volumes:
       - tailscale-state:/var/lib/tailscale
       - tailscale-run:/var/run/tailscale
+    # 環境変数（macOS/Docker Desktop対応でuserspaceモードを有効化）
+    environment:
+      - TS_USERSPACE=true
     # .envと.env.localの両方を読み込む
     # .env.localが存在しない場合は.envのみで動作（フォールバック）
     # 要件: 3.7, 3.8
@@ -39,6 +45,13 @@ services:
     # 要件: 2.14
     ports:
       - "127.0.0.1:10000:10000"
+    # Tailnet接続状態のヘルスチェック
+    healthcheck:
+      test: ["CMD", "tailscale", "--socket=/var/run/tailscale/tailscaled.sock", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     # コンテナ異常終了時に自動再起動
     # 要件: 1.5
     restart: unless-stopped
@@ -55,10 +68,11 @@ services:
     # これにより、Tailnet IPへのinboundトラフィックが直接FastAPIに届く
     # 要件: 2.13
     network_mode: "service:tailscale"
-    # Tailscale起動後にFastAPIを起動
+    # Tailscale接続完了後にFastAPIを起動（healthcheck連携）
     # 要件: 2.12
     depends_on:
-      - tailscale
+      tailscale:
+        condition: service_healthy
     # .envと.env.localの両方を読み込む
     # 要件: 3.7, 3.9
     env_file:

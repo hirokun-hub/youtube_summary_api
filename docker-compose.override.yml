@@ -1,0 +1,30 @@
+# Docker Compose Override（開発用）
+# Tailscaleなしでローカル開発を行う場合に使用
+#
+# 使用方法:
+#   開発モード起動: docker compose --profile dev up -d api-dev
+#   本番モード起動: docker compose up -d（通常のdocker-compose.ymlを使用）
+#
+# 注意: このファイルはデフォルトで読み込まれるため、
+#       本番環境では docker compose -f docker-compose.yml up -d を使用してください
+
+services:
+  # 開発用FastAPIコンテナ（Tailscaleなし）
+  # Tailnet接続なしでローカル開発・テストを行う場合に使用
+  api-dev:
+    profiles:
+      - dev
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: youtube-api-fastapi-dev
+    # 開発モードではTailscaleコンテナに依存しない
+    # network_modeも使用せず、直接ポートを公開
+    ports:
+      - "127.0.0.1:10000:10000"
+    env_file:
+      - path: ./.env
+        required: true
+      - path: ./.env.local
+        required: false
+    restart: unless-stopped
