@@ -1,0 +1,11 @@
+# Tailscale用Dockerfile
+# 要件: 4.6, 4.7
+
+FROM tailscale/tailscale:latest
+
+# 起動スクリプトをコピー
+COPY docker/tailscale-entrypoint.sh /usr/local/bin/tailscale-entrypoint.sh
+RUN chmod +x /usr/local/bin/tailscale-entrypoint.sh
+
+# ENTRYPOINTで起動スクリプトを実行
+ENTRYPOINT ["/usr/local/bin/tailscale-entrypoint.sh"]

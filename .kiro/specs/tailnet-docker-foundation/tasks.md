@@ -30,13 +30,13 @@
     - `main.py`と`app/`ディレクトリをコピー
     - _要件: 4.2, 4.3, 4.4, 4.5_
 
-- [ ] 4. Tailscale用Dockerfileと起動スクリプトの作成
-  - [ ] 4.1 `docker/tailscale-entrypoint.sh`を作成する
+- [x] 4. Tailscale用Dockerfileと起動スクリプトの作成
+  - [x] 4.1 `docker/tailscale-entrypoint.sh`を作成する
     - tailscaledをバックグラウンドで起動
     - 既存認証状態の確認ロジックを実装
     - `tailscale status`の結果に基づく条件分岐を実装
     - _要件: 2.5, 2.6, 2.7, 2.8, 2.9, 2.10, 4.7, 4.8_
-  - [ ] 4.2 `docker/Dockerfile.tailscale`を作成する
+  - [x] 4.2 `docker/Dockerfile.tailscale`を作成する
     - `tailscale/tailscale:latest`をベースイメージとして使用
     - `tailscale-entrypoint.sh`をコピーし、実行権限を付与
     - _要件: 4.6, 4.7_
