@@ -11,13 +11,21 @@
     - `youtube-transcript-api>=1.2.0` に更新
     - `pytube` を削除
     - _要件: US-1, 要件定義書 技術方針_
-  - [ ] 1.3 `tests/` ディレクトリと基盤ファイルを作成する
+  - [ ] 1.3 `app/core/constants.py` を作成する
+    - エラーコード定数（ERROR_INVALID_URL, ERROR_VIDEO_NOT_FOUND, ERROR_TRANSCRIPT_NOT_FOUND, ERROR_TRANSCRIPT_DISABLED, ERROR_RATE_LIMITED, ERROR_METADATA_FAILED, ERROR_INTERNAL）
+    - 字幕取得の言語優先順位（TRANSCRIPT_LANGUAGES）
+    - oEmbed API設定（OEMBED_URL_TEMPLATE, OEMBED_TIMEOUT_SECONDS）
+    - yt-dlpキー名マッピング（YTDLP_KEY_MAP, YTDLP_DIRECT_KEYS）
+    - メッセージ文字列（MSG_SUCCESS, MSG_INVALID_URL 等）
+    - _要件: 設計書 6_
+  - [ ] 1.4 `tests/` ディレクトリと基盤ファイルを作成する
     - `tests/__init__.py`
     - `tests/conftest.py`（環境変数モック、TestClient fixture 2種（認証バイパスあり/なし）、共通テストデータ）
     - `pytest.ini`
     - `.env.local` の `override=True` 問題を考慮し、`dependency_overrides` による認証バイパスを主軸とする
-    - _要件: 設計書 1.2, 2.4, 2.5_
-  - [ ] 1.4 テスト用依存をローカルにインストールし、`pytest` が実行できることを確認する
+    - テストコードではエラーコード等を `app.core.constants` からインポートして使用する
+    - _要件: 設計書 1.2, 2.4, 2.5, 6_
+  - [ ] 1.5 テスト用依存をローカルにインストールし、`pytest` が実行できることを確認する
     - `pip install -r requirements-dev.txt && pytest --version`
     - _要件: 設計書 5_
 
@@ -72,31 +80,33 @@
   - [ ] 5.1 `app/services/youtube.py` に yt-dlp メタデータ取得関数を追加する
     - `yt_dlp.YoutubeDL` で `extract_info(url, download=False)` を呼び出し
     - `ydl.sanitize_info(info)` でデータをサニタイズ
+    - `YTDLP_KEY_MAP` と `YTDLP_DIRECT_KEYS`（`app.core.constants`）を使用してフィールドをマッピング
     - すべてのフィールドを `info.get("key")` で取得（キー不在時はNone）
-    - yt-dlpのキー名からレスポンスのフィールド名にマッピング（例: `thumbnail` → `thumbnail_url`、`channel` → `channel_name`）
     - 例外 `yt_dlp.utils.DownloadError` をキャッチ
-    - _要件: US-1, 要件定義書 フィールド定義_
+    - _要件: US-1, 要件定義書 フィールド定義, 設計書 6_
   - [ ] 5.2 yt-dlp 失敗時の oEmbed フォールバック処理を実装する
     - yt-dlp が `DownloadError` を投げた場合のみ oEmbed API を呼び出す
+    - `OEMBED_URL_TEMPLATE` と `OEMBED_TIMEOUT_SECONDS`（`app.core.constants`）を使用
     - oEmbed から title, channel_name（author_name）, thumbnail_url を取得
-    - _要件: US-3, 要件定義書 フォールバック_
+    - _要件: US-3, 要件定義書 フォールバック, 設計書 6_
   - [ ] 5.3 youtube-transcript-api を v1.2.x の新APIに移行する
     - `YouTubeTranscriptApi()` でインスタンス生成
-    - `api.fetch(video_id, languages=['ja', 'en'])` で `FetchedTranscript` を取得（`fetch()` ショートカット使用）
+    - `api.fetch(video_id, languages=TRANSCRIPT_LANGUAGES)` で `FetchedTranscript` を取得（`fetch()` ショートカット使用）
     - `fetched.language_code` → `transcript_language`
     - `fetched.is_generated` → `is_generated`
     - `fetched.to_raw_data()` で `list[dict]` に変換し、現在と同一のタイムスタンプフォーマットで文字列化
     - _要件: US-1, 要件定義書 youtube-transcript-api の破壊的変更_
   - [ ] 5.4 エラーコード体系を実装する
+    - `app.core.constants` のエラーコード定数とメッセージ定数を使用する（ハードコードしない）
     - 各例外に対応する `error_code` を設定
-    - `DownloadError` → `METADATA_FAILED`（字幕成功時）/ `VIDEO_NOT_FOUND`（全体失敗時）
-    - `NoTranscriptFound` → `TRANSCRIPT_NOT_FOUND`
-    - `TranscriptsDisabled` → `TRANSCRIPT_DISABLED`
-    - `YouTubeRequestFailed` → `RATE_LIMITED`
-    - `RequestBlocked` → `RATE_LIMITED`
-    - URL正規表現不一致 → `INVALID_URL`
-    - その他 → `INTERNAL_ERROR`
-    - _要件: US-2, 要件定義書 エラーコード定義_
+    - `DownloadError` → `ERROR_METADATA_FAILED`（字幕成功時）/ `ERROR_VIDEO_NOT_FOUND`（全体失敗時）
+    - `NoTranscriptFound` → `ERROR_TRANSCRIPT_NOT_FOUND`
+    - `TranscriptsDisabled` → `ERROR_TRANSCRIPT_DISABLED`
+    - `YouTubeRequestFailed` → `ERROR_RATE_LIMITED`
+    - `RequestBlocked` → `ERROR_RATE_LIMITED`
+    - URL正規表現不一致 → `ERROR_INVALID_URL`
+    - その他 → `ERROR_INTERNAL`
+    - _要件: US-2, 要件定義書 エラーコード定義, 設計書 6_
   - [ ] 5.5 `status` フィールドを `success` と連動して設定する
     - _要件: US-4_
   - [ ] 5.6 処理順序を変更する（メタデータ取得 → 字幕取得）

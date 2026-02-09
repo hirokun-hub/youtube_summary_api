@@ -16,6 +16,9 @@
 youtube_summary_api/
 ├── app/
 │   ├── core/
+│   │   ├── constants.py        ← 新規: エラーコード、設定値、キー名マッピング等の定数
+│   │   ├── logging_config.py
+│   │   └── security.py
 │   ├── models/
 │   │   └── schemas.py          ← レスポンスモデル拡張
 │   ├── routers/
@@ -228,6 +231,7 @@ def client_no_auth_override():
 
 ```
 Phase 1: テスト基盤構築
+  → app/core/constants.py 作成（エラーコード、設定値、キー名マッピング）
   → pytest + conftest.py のセットアップ（環境変数モック、TestClient、APIキー無効化）
   → requirements-dev.txt 作成
   → test_schemas.py（S-1〜S-6）を書く → RED
@@ -274,3 +278,105 @@ pytest tests/test_youtube_service.py::test_success_all_data -v
 # テスト用イメージでビルド（INSTALL_DEV=true）
 docker compose exec api pytest tests/ -v
 ```
+
+## 6. 定数管理の設計
+
+### 6.1 方針
+
+ハードコードされた値を `app/core/constants.py` に集約し、サービス層・テストコードの両方から同一の定数を参照する。
+これにより、値の変更が1箇所で済み、テストと実装の乖離を防ぐ。
+
+### 6.2 `app/core/constants.py` の構成
+
+```python
+"""アプリケーション全体で使用する定数を一元管理する。"""
+
+# --- エラーコード ---
+# サービス層で設定し、APIレスポンスの error_code フィールドに使用する。
+# テストコードでもこの定数を参照して検証する。
+ERROR_INVALID_URL = "INVALID_URL"
+ERROR_VIDEO_NOT_FOUND = "VIDEO_NOT_FOUND"
+ERROR_TRANSCRIPT_NOT_FOUND = "TRANSCRIPT_NOT_FOUND"
+ERROR_TRANSCRIPT_DISABLED = "TRANSCRIPT_DISABLED"
+ERROR_RATE_LIMITED = "RATE_LIMITED"
+ERROR_METADATA_FAILED = "METADATA_FAILED"
+ERROR_INTERNAL = "INTERNAL_ERROR"
+
+# --- 字幕取得の言語優先順位 ---
+TRANSCRIPT_LANGUAGES = ['ja', 'en']
+
+# --- oEmbed API ---
+OEMBED_URL_TEMPLATE = "https://www.youtube.com/oembed?url={url}&format=json"
+OEMBED_TIMEOUT_SECONDS = 10
+
+# --- yt-dlp キー名 → レスポンスフィールド名のマッピング ---
+# yt-dlp の extract_info が返す dict のキー名と、
+# SummaryResponse のフィールド名が異なるものだけを定義する。
+# キー名が同一のもの（upload_date, duration, view_count 等）はマッピング不要。
+YTDLP_KEY_MAP = {
+    "channel": "channel_name",
+    "thumbnail": "thumbnail_url",
+}
+
+# yt-dlp の extract_info から取得するキーの一覧（マッピング不要のもの）
+YTDLP_DIRECT_KEYS = [
+    "title", "upload_date", "duration", "duration_string",
+    "view_count", "like_count", "description", "tags",
+    "categories", "channel_id", "channel_follower_count", "webpage_url",
+]
+
+# --- メッセージ ---
+MSG_SUCCESS = "Successfully retrieved data."
+MSG_INVALID_URL = "無効なYouTube動画URLです。有効なURL形式か確認してください。"
+MSG_VIDEO_NOT_FOUND = "YouTubeから情報を取得できませんでした。動画が存在しないか、非公開の可能性があります。"
+MSG_TRANSCRIPT_NOT_FOUND = "この動画には利用可能な文字起こしがありませんでした。"
+MSG_TRANSCRIPT_DISABLED = "この動画では字幕機能が無効化されています。"
+MSG_RATE_LIMITED = "YouTubeへのリクエストが多すぎるため、一時的に情報を取得できません。時間をおいて再度お試しください。"
+MSG_INTERNAL_ERROR = "内部処理中に予期せぬエラーが発生しました。"
+MSG_METADATA_FAILED = "メタデータの取得に失敗しましたが、字幕は正常に取得できました。"
+```
+
+### 6.3 使用例
+
+**サービス層での使用:**
+```python
+from app.core.constants import (
+    ERROR_INVALID_URL, MSG_INVALID_URL,
+    TRANSCRIPT_LANGUAGES, OEMBED_URL_TEMPLATE, OEMBED_TIMEOUT_SECONDS,
+    YTDLP_KEY_MAP, YTDLP_DIRECT_KEYS,
+)
+
+# エラーレスポンス
+return SummaryResponse(
+    success=False,
+    message=MSG_INVALID_URL,
+    error_code=ERROR_INVALID_URL,
+)
+
+# yt-dlp キー名マッピング
+for ytdlp_key, response_field in YTDLP_KEY_MAP.items():
+    result[response_field] = info.get(ytdlp_key)
+for key in YTDLP_DIRECT_KEYS:
+    result[key] = info.get(key)
+
+# 字幕取得
+fetched = api.fetch(video_id, languages=TRANSCRIPT_LANGUAGES)
+
+# oEmbed フォールバック
+oembed_url = OEMBED_URL_TEMPLATE.format(url=normalized_url)
+meta_resp = requests.get(oembed_url, timeout=OEMBED_TIMEOUT_SECONDS)
+```
+
+**テストコードでの使用:**
+```python
+from app.core.constants import ERROR_TRANSCRIPT_NOT_FOUND, ERROR_INVALID_URL
+
+assert response.error_code == ERROR_TRANSCRIPT_NOT_FOUND
+```
+
+### 6.4 定数化しないもの
+
+以下は定数化せず、現在の場所に留める:
+- **YouTube URL正規表現**: `_extract_video_id()` 関数内に局所化されており、他で参照しない
+- **yt-dlp の `YoutubeDL` オプション**: サービス層の実装詳細であり、テストではモックで上書きされる
+- **APIバージョンプレフィックス** (`/api/v1`): ルーター定義に局所化されており、変更頻度が低い
