@@ -95,7 +95,7 @@ yt-dlpで `title` と `channel_name` も取得できるため、正常時はoEmb
 
 ### youtube-transcript-api の破壊的変更（v1.1.0 → v1.2.x）
 
-v1.2.0（2025年7月21日）で旧APIが完全削除されている:
+最新バージョンは v1.2.3（2025年10月13日リリース）。v1.2.0で旧APIが完全削除されている:
 
 | 旧API（v1.1.0、現在使用中） | 新API（v1.2.x） |
 |--------------------------|----------------|
@@ -104,7 +104,30 @@ v1.2.0（2025年7月21日）で旧APIが完全削除されている:
 | クラスメソッド | **インスタンスメソッド** |
 | 戻り値: `list[dict]` | 戻り値: `FetchedTranscript`（`.to_raw_data()` で旧形式に変換可能） |
 
-`transcript_language` と `is_generated` を取得するためには、`list()` → `find_transcript()` → プロパティ取得 → `fetch()` の流れが必要。
+**`fetch()` ショートカットで `transcript_language` と `is_generated` も取得可能:**
+
+```python
+api = YouTubeTranscriptApi()
+fetched = api.fetch(video_id, languages=['ja', 'en'])
+fetched.language_code   # → 'ja'（transcript_language に対応）
+fetched.is_generated    # → False（is_generated に対応）
+fetched.to_raw_data()   # → [{'text': '...', 'start': 0.0, 'duration': 1.5}, ...]
+```
+
+`list()` → `find_transcript()` → `fetch()` の3ステップは不要。`fetch()` 1回で本文・言語コード・自動生成フラグがすべて取得できる。
+
+### youtube-transcript-api の例外クラス（v1.2.x）
+
+v1.0.0以降で追加された例外クラスがある:
+
+| 例外クラス | 説明 |
+|-----------|------|
+| `NoTranscriptFound` | 指定言語の字幕が見つからない |
+| `TranscriptsDisabled` | 動画の字幕機能が無効化されている |
+| `YouTubeRequestFailed` | YouTubeへのリクエスト失敗（汎用） |
+| `RequestBlocked` | リクエストがブロックされた（IP制限等） |
+
+いずれも `youtube_transcript_api` からインポート可能。
 
 ## APIレスポンス仕様（変更後）
 
@@ -254,8 +277,9 @@ v1.2.0（2025年7月21日）で旧APIが完全削除されている:
 | `null` | エラーなし | `true` | `"ok"` |
 | `INVALID_URL` | YouTube URLとして認識できない | `false` | `"error"` |
 | `VIDEO_NOT_FOUND` | 動画が存在しない・非公開・削除済み | `false` | `"error"` |
-| `TRANSCRIPT_NOT_FOUND` | 字幕が見つからない（メタデータは取得済み） | `false` | `"error"` |
-| `RATE_LIMITED` | YouTubeへのリクエスト過多 | `false` | `"error"` |
+| `TRANSCRIPT_NOT_FOUND` | 指定言語の字幕が見つからない（メタデータは取得済み） | `false` | `"error"` |
+| `TRANSCRIPT_DISABLED` | 動画の字幕機能が無効化されている（メタデータは取得済み） | `false` | `"error"` |
+| `RATE_LIMITED` | YouTubeへのリクエスト過多・IPブロック | `false` | `"error"` |
 | `METADATA_FAILED` | yt-dlpによるメタデータ取得に失敗（oEmbedにフォールバック済み） | `true`（字幕が取れていれば） | `"ok"` |
 | `INTERNAL_ERROR` | 予期せぬエラー | `false` | `"error"` |
 
@@ -265,6 +289,15 @@ v1.2.0（2025年7月21日）で旧APIが完全削除されている:
 |-----------|-------------|------------|
 | `DownloadError` | `yt_dlp.utils.DownloadError` | `METADATA_FAILED`（字幕成功時）または `VIDEO_NOT_FOUND`（全体失敗時） |
 | `ExtractorError` | `yt_dlp.utils.ExtractorError` | `DownloadError` にラップされて伝播するため、通常は `DownloadError` で捕捉 |
+
+### youtube-transcript-api の例外とerror_codeのマッピング
+
+| 例外クラス | インポートパス | マッピング先 |
+|-----------|-------------|------------|
+| `NoTranscriptFound` | `youtube_transcript_api.NoTranscriptFound` | `TRANSCRIPT_NOT_FOUND` |
+| `TranscriptsDisabled` | `youtube_transcript_api.TranscriptsDisabled` | `TRANSCRIPT_DISABLED` |
+| `YouTubeRequestFailed` | `youtube_transcript_api.YouTubeRequestFailed` | `RATE_LIMITED` |
+| `RequestBlocked` | `youtube_transcript_api.RequestBlocked` | `RATE_LIMITED` |
 
 ## 設計上の注意
 

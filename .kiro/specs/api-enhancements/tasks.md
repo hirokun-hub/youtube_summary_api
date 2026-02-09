@@ -13,8 +13,9 @@
     - _要件: US-1, 要件定義書 技術方針_
   - [ ] 1.3 `tests/` ディレクトリと基盤ファイルを作成する
     - `tests/__init__.py`
-    - `tests/conftest.py`（環境変数モック、TestClient fixture、APIキー無効化、共通テストデータ）
+    - `tests/conftest.py`（環境変数モック、TestClient fixture 2種（認証バイパスあり/なし）、共通テストデータ）
     - `pytest.ini`
+    - `.env.local` の `override=True` 問題を考慮し、`dependency_overrides` による認証バイパスを主軸とする
     - _要件: 設計書 1.2, 2.4, 2.5_
   - [ ] 1.4 テスト用依存をローカルにインストールし、`pytest` が実行できることを確認する
     - `pip install -r requirements-dev.txt && pytest --version`
@@ -24,7 +25,7 @@
 
 - [ ] 2. スキーマテストを書く（RED）
   - [ ] 2.1 `tests/test_schemas.py` にテストケース S-1〜S-6 を実装する
-    - S-1: 全21フィールドが定義されていること
+    - S-1: 全21フィールドが定義されていること（`status` は `@computed_field` のため `model_computed_fields` で確認）
     - S-2: 成功レスポンスの生成（全フィールドに値）
     - S-3: 失敗レスポンスの生成（transcript=null、メタデータあり）
     - S-4: 失敗レスポンスの生成（全フィールドnull）
@@ -36,7 +37,7 @@
 - [ ] 3. レスポンスモデルを実装する（GREEN）
   - [ ] 3.1 `app/models/schemas.py` の `SummaryResponse` に16フィールドを追加する
     - `status`, `error_code`, `upload_date`, `duration`, `duration_string`, `view_count`, `like_count`, `thumbnail_url`, `description`, `tags`, `categories`, `channel_id`, `channel_follower_count`, `webpage_url`, `transcript_language`, `is_generated`
-    - `status` は `success` の値から自動導出する設計とする
+    - `status` は `@computed_field` + `@property` で `success` の値から自動導出する設計とする
     - _要件: US-1, US-2, US-4_
   - [ ] 3.2 `model_config` のレスポンス例を更新する
     - _要件: US-1_
@@ -45,20 +46,24 @@
 ## Phase 3: サービス層（RED → GREEN）
 
 - [ ] 4. サービス層テストを書く（RED）
-  - [ ] 4.1 `tests/test_youtube_service.py` にテストケース Y-1〜Y-13 を実装する
+  - [ ] 4.1 `tests/test_youtube_service.py` にテストケース Y-1〜Y-17 を実装する
     - Y-1: 正常系 全データ取得成功（yt-dlp成功 + transcript成功、oEmbed呼び出しなし）
     - Y-2: 正常系 yt-dlp失敗→oEmbedフォールバック + transcript成功
     - Y-3: 異常系 字幕なし + メタデータ成功（error_code="TRANSCRIPT_NOT_FOUND"）
     - Y-4: 異常系 動画不存在（error_code="VIDEO_NOT_FOUND"）
     - Y-5: 異常系 無効URL（error_code="INVALID_URL"）
-    - Y-6: 異常系 レート制限（error_code="RATE_LIMITED"）
+    - Y-6: 異常系 レート制限 YouTubeRequestFailed（error_code="RATE_LIMITED"）
     - Y-7: 異常系 予期せぬエラー（error_code="INTERNAL_ERROR"）
     - Y-8: 安定性中フィールドの欠損（like_count=None等）
-    - Y-9: transcript_language と is_generated の正しい取得
+    - Y-9: transcript_language と is_generated の正しい取得（`FetchedTranscript` のプロパティから）
     - Y-10: yt-dlp DownloadError → METADATA_FAILED マッピング
     - Y-11: transcript の後方互換性（タイムスタンプフォーマット同一）
     - Y-12: yt-dlp戻り値にキーが存在しない場合（nullで返す）
-    - Y-13: error_code 6種の全カバレッジ
+    - Y-13: error_code 7種の全カバレッジ（TRANSCRIPT_DISABLED 追加）
+    - Y-14: 異常系 字幕機能が無効化（TranscriptsDisabled → error_code="TRANSCRIPT_DISABLED"）
+    - Y-15: 異常系 IPブロック（RequestBlocked → error_code="RATE_LIMITED"）
+    - Y-16: 異常系 oEmbedタイムアウト/非JSONレスポンス
+    - Y-17: video_id 正規表現の境界値テスト（shorts/, ライブURL, クエリ順序等）
     - モック対象: `app.services.youtube.yt_dlp.YoutubeDL`, `app.services.youtube.YouTubeTranscriptApi`, `app.services.youtube.requests.get`
     - テスト実行 → 全件失敗（RED）を確認
     - _要件: US-1, US-2, US-3, US-4, 設計書 3.2_
@@ -77,16 +82,18 @@
     - _要件: US-3, 要件定義書 フォールバック_
   - [ ] 5.3 youtube-transcript-api を v1.2.x の新APIに移行する
     - `YouTubeTranscriptApi()` でインスタンス生成
-    - `api.list(video_id)` → `transcript_list.find_transcript(['ja', 'en'])` → `transcript.fetch()`
-    - `transcript.language_code` → `transcript_language`
-    - `transcript.is_generated` → `is_generated`
+    - `api.fetch(video_id, languages=['ja', 'en'])` で `FetchedTranscript` を取得（`fetch()` ショートカット使用）
+    - `fetched.language_code` → `transcript_language`
+    - `fetched.is_generated` → `is_generated`
     - `fetched.to_raw_data()` で `list[dict]` に変換し、現在と同一のタイムスタンプフォーマットで文字列化
     - _要件: US-1, 要件定義書 youtube-transcript-api の破壊的変更_
   - [ ] 5.4 エラーコード体系を実装する
     - 各例外に対応する `error_code` を設定
     - `DownloadError` → `METADATA_FAILED`（字幕成功時）/ `VIDEO_NOT_FOUND`（全体失敗時）
     - `NoTranscriptFound` → `TRANSCRIPT_NOT_FOUND`
+    - `TranscriptsDisabled` → `TRANSCRIPT_DISABLED`
     - `YouTubeRequestFailed` → `RATE_LIMITED`
+    - `RequestBlocked` → `RATE_LIMITED`
     - URL正規表現不一致 → `INVALID_URL`
     - その他 → `INTERNAL_ERROR`
     - _要件: US-2, 要件定義書 エラーコード定義_
