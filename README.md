@@ -1,12 +1,114 @@
 # YouTube Summary API
 
-YouTube動画の字幕を取得し、要約を生成するAPIサーバーです。Docker Compose環境でTailnetネットワーク内に常駐化して運用します。
+YouTube動画のメタデータと字幕（文字起こし）を取得するAPIサーバーです。Docker Compose環境でTailnetネットワーク内に常駐化して運用します。
 
 ## 機能
 
-- YouTube動画の字幕取得
-- Gemini APIによる要約生成（将来実装予定）
+- YouTube動画のメタデータ一括取得（yt-dlp）
+- 字幕取得（youtube-transcript-api）
+- 7種のエラーコードによる障害原因の特定
 - Tailnetネットワーク経由のセキュアなアクセス
+- iPhoneショートカットからの利用を想定した設計
+
+## APIリファレンス
+
+### `POST /api/v1/summary`
+
+YouTube動画のURLを受け取り、メタデータと字幕を返します。
+
+#### リクエスト
+
+```bash
+curl -X POST http://<host>:10000/api/v1/summary \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: your-api-key" \
+  -d '{"url": "https://www.youtube.com/watch?v=xxxxx"}'
+```
+
+#### レスポンスフィールド一覧
+
+| フィールド | 型 | 説明 |
+|---|---|---|
+| `success` | bool | 字幕取得に成功したか |
+| `status` | string | `"ok"` または `"error"`（iPhoneの言語設定に依存しない判定用） |
+| `message` | string | 処理結果の説明メッセージ |
+| `error_code` | string \| null | エラー種別コード（成功時はnull） |
+| `title` | string \| null | 動画タイトル |
+| `channel_name` | string \| null | チャンネル名 |
+| `channel_id` | string \| null | チャンネルID |
+| `channel_follower_count` | int \| null | チャンネル登録者数 |
+| `upload_date` | string \| null | 投稿日（ISO 8601: YYYY-MM-DD） |
+| `duration` | int \| null | 動画の長さ（秒） |
+| `duration_string` | string \| null | 動画の長さ（"6:00"形式） |
+| `view_count` | int \| null | 再生回数 |
+| `like_count` | int \| null | 高評価数 |
+| `thumbnail_url` | string \| null | サムネイルURL |
+| `description` | string \| null | 概要欄テキスト |
+| `tags` | list[str] \| null | タグ一覧 |
+| `categories` | list[str] \| null | カテゴリ一覧 |
+| `webpage_url` | string \| null | 正規化された動画URL |
+| `transcript` | string \| null | タイムスタンプ付き文字起こし全文 |
+| `transcript_language` | string \| null | 取得した字幕の言語コード |
+| `is_generated` | bool \| null | 自動生成字幕かどうか |
+
+#### エラーコード
+
+| error_code | 意味 |
+|---|---|
+| `null` | エラーなし（success=true） |
+| `INVALID_URL` | YouTube URLとして認識できない |
+| `VIDEO_NOT_FOUND` | 動画が存在しない・非公開・削除済み |
+| `TRANSCRIPT_NOT_FOUND` | 指定言語の字幕が見つからない |
+| `TRANSCRIPT_DISABLED` | 字幕機能が無効化されている |
+| `RATE_LIMITED` | リクエスト過多・IPブロック |
+| `METADATA_FAILED` | メタデータ取得失敗（字幕は取得成功） |
+| `INTERNAL_ERROR` | 予期せぬエラー |
+
+#### レスポンス例（成功）
+
+```json
+{
+  "success": true,
+  "status": "ok",
+  "message": "Successfully retrieved data.",
+  "error_code": null,
+  "title": "動画タイトル",
+  "channel_name": "チャンネル名",
+  "channel_id": "UCxxxx",
+  "channel_follower_count": 1250000,
+  "upload_date": "2026-02-08",
+  "duration": 360,
+  "duration_string": "6:00",
+  "view_count": 54000,
+  "like_count": 1200,
+  "thumbnail_url": "https://i.ytimg.com/vi/xxx/maxresdefault.jpg",
+  "description": "概要欄テキスト...",
+  "tags": ["Python", "Tutorial"],
+  "categories": ["Education"],
+  "webpage_url": "https://www.youtube.com/watch?v=xxx",
+  "transcript": "[00:00:00] こんにちは...",
+  "transcript_language": "ja",
+  "is_generated": true
+}
+```
+
+#### レスポンス例（失敗 — 字幕なし、メタデータあり）
+
+```json
+{
+  "success": false,
+  "status": "error",
+  "message": "この動画には利用可能な文字起こしがありませんでした。",
+  "error_code": "TRANSCRIPT_NOT_FOUND",
+  "title": "動画タイトル",
+  "channel_name": "チャンネル名",
+  "upload_date": "2026-02-08",
+  "duration": 360,
+  "transcript": null,
+  "transcript_language": null,
+  "is_generated": null
+}
+```
 
 ## 必要条件
 
@@ -26,168 +128,112 @@ cp .env.example .env
 cat > .env.local << EOF
 API_KEY=your-secret-api-key-here
 TAILSCALE_AUTH_KEY=tskey-auth-xxxxxxxxxxxxx
-GEMINI_API_KEY=your-gemini-api-key-here
 EOF
 ```
 
 #### 環境変数の説明
 
 | ファイル | 変数名 | 説明 | 必須 |
-|---------|--------|------|------|
+|---|---|---|---|
 | `.env` | `LOG_LEVEL` | ログレベル（DEBUG, INFO, WARNING, ERROR） | いいえ |
 | `.env` | `TAILSCALE_HOSTNAME` | Tailnet内でのホスト名 | はい |
-| `.env.local` | `API_KEY` | FastAPI認証キー | はい |
+| `.env.local` | `API_KEY` | FastAPI認証キー（X-API-KEYヘッダーで送信） | はい |
 | `.env.local` | `TAILSCALE_AUTH_KEY` | Tailscale認証キー | はい |
-| `.env.local` | `GEMINI_API_KEY` | Gemini APIキー（将来用） | いいえ |
 
 ### 2. Tailscale認証キーの取得
 
 1. [Tailscaleダッシュボード](https://login.tailscale.com/admin/settings/keys)にアクセス
 2. 「Generate auth key」をクリック
 3. **「Reusable」オプションを有効にする（推奨）**
-   - 再利用可能なキーを使用すると、コンテナ再起動時も同じキーを使用可能
-   - single-use（一回限り）のキーを使用する場合、ボリューム削除後は新しいキーが必要
 4. 生成されたキーを`.env.local`の`TAILSCALE_AUTH_KEY`に設定
 
 ### 3. コンテナの起動
 
 ```bash
-# コンテナをバックグラウンドで起動
 docker compose up -d
-
-# ログを確認（オプション）
-docker compose logs -f
+docker compose logs -f  # ログ確認（オプション）
 ```
 
 ### 4. 動作確認
 
 ```bash
-# ローカルホストからのヘルスチェック
+# ヘルスチェック
 curl http://localhost:10000/
-# 期待される応答: {"message": "Welcome to the YouTube Summary API!"}
 
-# Tailnet接続状態の確認
-docker compose exec tailscale tailscale status
-
-# Tailscale IPアドレスの確認
-docker compose exec tailscale tailscale ip -4
+# API呼び出し
+curl -X POST http://localhost:10000/api/v1/summary \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: your-api-key" \
+  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
 ```
 
-## 起動方法
-
-### 推奨: Docker Compose（推奨）
+## 運用
 
 ```bash
-# 起動
-docker compose up -d
-
-# 停止
-docker compose down
-
-# 停止（ボリュームも削除）
-docker compose down -v
-
-# 再起動
-docker compose restart
-
-# ログ確認
-docker compose logs -f api        # FastAPIのログ
-docker compose logs -f tailscale  # Tailscaleのログ
+docker compose up -d        # 起動
+docker compose down          # 停止
+docker compose restart api   # API再起動（Tailscale維持）
+docker compose logs -f api   # APIログ確認
+docker compose build api     # APIイメージ再ビルド
 ```
 
-### 代替: Windowsバッチファイル（非推奨）
-
-以下のバッチファイルは互換目的で残置されていますが、Docker Composeへの移行後は使用しないでください。
-
-- `start_api.bat`
-- `run_fastapi.bat`
-- `run_funnel.bat`
-
-## アクセス方法
-
-### ローカルホストから
+## テスト
 
 ```bash
-curl http://localhost:10000/
-curl http://localhost:10000/api/v1/summary?video_id=VIDEO_ID
+pip install -r requirements-dev.txt
+pytest tests/ -v
 ```
 
-### Tailnetネットワーク内から
-
-Tailnetに接続した別デバイスからアクセスする場合：
-
-```bash
-# Tailscale IPを確認
-docker compose exec tailscale tailscale ip -4
-# 例: 100.x.x.x
-
-# Tailnet経由でアクセス
-curl http://100.x.x.x:10000/
-curl http://100.x.x.x:10000/api/v1/summary?video_id=VIDEO_ID
-```
-
-**注意**: Tailnet経由のアクセスにはHTTPSは不要です（WireGuardで暗号化済み）。
-
-## トラブルシューティング
-
-### Tailscale接続に失敗する
-
-```bash
-# ログを確認
-docker compose logs tailscale
-
-# 認証状態をリセットして再接続
-docker compose down -v
-docker compose up -d
-```
-
-### FastAPIが起動しない
-
-```bash
-# ログを確認
-docker compose logs api
-
-# API_KEYが設定されているか確認
-grep API_KEY .env.local
-```
-
-### ポート10000が使用中
-
-```bash
-# 使用中のプロセスを確認
-lsof -i :10000
-
-# プロセスを停止してから再起動
-docker compose up -d
-```
+全38テスト（モデル6件 + サービス層17件 + API統合7件 + パラメタライズ8件）。外部通信なし（すべてモック）。
 
 ## ディレクトリ構造
 
 ```
 .
 ├── app/
-│   ├── core/           # コア機能（ログ、セキュリティ）
-│   ├── models/         # データモデル
-│   ├── routers/        # APIルーター
-│   └── services/       # ビジネスロジック
+│   ├── core/
+│   │   ├── constants.py       # エラーコード・メッセージ・キーマッピング定数
+│   │   ├── logging_config.py  # ロギング設定
+│   │   └── security.py        # APIキー認証
+│   ├── models/
+│   │   └── schemas.py         # リクエスト・レスポンスモデル（21フィールド）
+│   ├── routers/
+│   │   └── summary.py         # POST /api/v1/summary エンドポイント
+│   └── services/
+│       └── youtube.py         # yt-dlp + youtube-transcript-api連携
+├── tests/
+│   ├── conftest.py            # テストfixture・モック定義
+│   ├── test_schemas.py        # モデルテスト（S-1〜S-6）
+│   ├── test_youtube_service.py # サービス層テスト（Y-1〜Y-17）
+│   └── test_api_endpoint.py   # API統合テスト（E-1〜E-7）
 ├── docker/
-│   ├── Dockerfile.api          # FastAPI用Dockerfile
-│   ├── Dockerfile.tailscale    # Tailscale用Dockerfile
-│   └── tailscale-entrypoint.sh # Tailscale起動スクリプト
-├── docs/               # ドキュメント
-├── .env                # 共有可能な環境変数
-├── .env.local          # 機密値（Git管理外）
-├── .env.example        # 環境変数テンプレート
-├── docker-compose.yml  # Docker Compose設定
-├── main.py             # FastAPIエントリーポイント
-└── requirements.txt    # Python依存パッケージ
+│   ├── Dockerfile.api         # FastAPI + Deno（yt-dlp用）
+│   ├── Dockerfile.tailscale   # Tailscaleサイドカー
+│   └── tailscale-entrypoint.sh
+├── docker-compose.yml
+├── main.py
+├── requirements.txt           # 本番依存
+├── requirements-dev.txt       # テスト依存
+└── pytest.ini
 ```
+
+## 技術スタック
+
+| コンポーネント | 技術 |
+|---|---|
+| フレームワーク | FastAPI + Uvicorn |
+| メタデータ取得 | yt-dlp（主）/ oEmbed API（フォールバック） |
+| 字幕取得 | youtube-transcript-api v1.2.x |
+| JSランタイム | Deno（yt-dlpのYouTube JS challenge対応） |
+| ネットワーク | Tailscale（WireGuard暗号化） |
+| 認証 | APIキー（X-API-KEYヘッダー） |
 
 ## セキュリティ
 
-- `.env`と`.env.local`は`.gitignore`に含まれており、バージョン管理されません
-- ポートマッピングは`127.0.0.1:10000:10000`に限定され、ホスト外部からの直接アクセスは不可
+- `.env.local`は`.gitignore`に含まれ、バージョン管理されません
+- ポートマッピングは`127.0.0.1:10000:10000`に限定（ホスト外部からの直接アクセス不可）
 - Tailnet経由のアクセスのみを許可し、外部公開はしません
+- APIキーの比較には`secrets.compare_digest`を使用（タイミング攻撃対策）
 
 ## ライセンス
 
