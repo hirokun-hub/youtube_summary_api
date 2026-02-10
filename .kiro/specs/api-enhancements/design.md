@@ -91,7 +91,7 @@ def test_metadata(mock_ydl_class):
     mock_instance.extract_info.return_value = {
         "title": "テスト動画",
         "channel": "テストチャンネル",
-        "upload_date": "20260208",
+        "upload_date": "2026-02-08",
         "duration": 360,
         # ... 他のフィールド
     }

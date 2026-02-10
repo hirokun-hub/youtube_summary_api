@@ -34,7 +34,7 @@ YTDLP_INFO = {
     "channel": "統合テストチャンネル",
     "channel_id": "UCtest",
     "channel_follower_count": 100,
-    "upload_date": "20260210",
+    "upload_date": "2026-02-10",
     "duration": 120,
     "duration_string": "2:00",
     "view_count": 1000,
@@ -66,7 +66,7 @@ def test_e1_success(mock_ydl_class, mock_ytt_class, client):
     assert data["error_code"] is None
     assert data["title"] == "統合テスト動画"
     assert data["channel_name"] == "統合テストチャンネル"
-    assert data["upload_date"] == "20260210"
+    assert data["upload_date"] == "2026-02-10"
     assert data["duration"] == 120
     assert data["duration_string"] == "2:00"
     assert data["view_count"] == 1000

@@ -21,6 +21,7 @@ from youtube_transcript_api import (
 
 from app.models.schemas import SummaryResponse
 from app.core.constants import (
+    ERROR_CODE_TO_MESSAGE,
     ERROR_INTERNAL,
     ERROR_INVALID_URL,
     ERROR_METADATA_FAILED,
@@ -31,10 +32,7 @@ from app.core.constants import (
     MSG_INTERNAL_ERROR,
     MSG_INVALID_URL,
     MSG_METADATA_FAILED,
-    MSG_RATE_LIMITED,
     MSG_SUCCESS,
-    MSG_TRANSCRIPT_DISABLED,
-    MSG_TRANSCRIPT_NOT_FOUND,
     MSG_VIDEO_NOT_FOUND,
     OEMBED_TIMEOUT_SECONDS,
     OEMBED_URL_TEMPLATE,
@@ -52,8 +50,8 @@ def _extract_video_id(url: str) -> str | None:
     様々な形式のYouTube URLから動画IDを抽出します。
     正規表現を使用して、標準、短縮、埋め込み形式のURLに対応します。
     """
-    # 参考: https://stackoverflow.com/a/7936523
-    regex = r"(?:https?://)?(?:www\.)?(?:youtube\.com/(?:[^/\n\s]+/[\S]+/|(?:v|e(?:mbed)?)/|\S*?[?&]v=)|youtu\.be/)([a-zA-Z0-9_-]{11})"
+    # 参考: https://stackoverflow.com/a/7936523 (shorts対応を追加)
+    regex = r"(?:https?://)?(?:www\.)?(?:youtube\.com/(?:shorts/|[^/\n\s]+/[\S]+/|(?:v|e(?:mbed)?)/|\S*?[?&]v=)|youtu\.be/)([a-zA-Z0-9_-]{11})"
     match = re.search(regex, url)
     if match:
         return match.group(1)
@@ -66,14 +64,15 @@ def _fetch_metadata_ytdlp(video_url: str) -> dict | None:
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
+        "socket_timeout": 30,
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
             info = ydl.sanitize_info(info)
             return info
-    except yt_dlp.utils.DownloadError:
-        logger.warning(f"yt-dlpによるメタデータ取得に失敗: {video_url}")
+    except Exception:
+        logger.warning(f"yt-dlpによるメタデータ取得に失敗: {video_url}", exc_info=True)
         return None
 
 
@@ -95,6 +94,13 @@ def _fetch_metadata_oembed(video_id: str) -> dict | None:
         return None
 
 
+def _convert_upload_date(raw: str | None) -> str | None:
+    """yt-dlpのYYYYMMDD形式をISO 8601（YYYY-MM-DD）に変換する。"""
+    if raw and len(raw) == 8:
+        return f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
+    return raw
+
+
 def _build_metadata_from_ytdlp(info: dict) -> dict:
     """yt-dlpの戻り値からレスポンス用のメタデータdictを構築する。"""
     result = {}
@@ -102,6 +108,7 @@ def _build_metadata_from_ytdlp(info: dict) -> dict:
         result[response_field] = info.get(ytdlp_key)
     for key in YTDLP_DIRECT_KEYS:
         result[key] = info.get(key)
+    result["upload_date"] = _convert_upload_date(result.get("upload_date"))
     return result
 
 
@@ -187,16 +194,7 @@ def get_summary_data(video_url: str) -> SummaryResponse:
             message = MSG_SUCCESS
     else:
         error_code = transcript_error_code
-        if error_code == ERROR_TRANSCRIPT_NOT_FOUND:
-            message = MSG_TRANSCRIPT_NOT_FOUND
-        elif error_code == ERROR_TRANSCRIPT_DISABLED:
-            message = MSG_TRANSCRIPT_DISABLED
-        elif error_code == ERROR_RATE_LIMITED:
-            message = MSG_RATE_LIMITED
-        elif error_code == ERROR_INTERNAL:
-            message = MSG_INTERNAL_ERROR
-        else:
-            message = MSG_INTERNAL_ERROR
+        message = ERROR_CODE_TO_MESSAGE.get(error_code, MSG_INTERNAL_ERROR)
 
         # メタデータもなければ VIDEO_NOT_FOUND
         if not metadata and ytdlp_failed:

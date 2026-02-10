@@ -144,7 +144,7 @@ v1.0.0以降で追加された例外クラスがある:
   "channel_name": "チャンネル名",
   "channel_id": "UCxxxx",
   "channel_follower_count": 1250000,
-  "upload_date": "20260208",
+  "upload_date": "2026-02-08",
   "duration": 360,
   "duration_string": "6:00",
   "view_count": 54000,
@@ -174,7 +174,7 @@ v1.0.0以降で追加された例外クラスがある:
   "channel_name": "チャンネル名",
   "channel_id": "UCxxxx",
   "channel_follower_count": 1250000,
-  "upload_date": "20260208",
+  "upload_date": "2026-02-08",
   "duration": 360,
   "duration_string": "6:00",
   "view_count": 54000,
@@ -244,7 +244,7 @@ v1.0.0以降で追加された例外クラスがある:
 | フィールド | 型 | 取得元 | yt-dlpキー名 | 説明 |
 |-----------|-----|--------|-------------|------|
 | `error_code` | string \| null | 内部判定 | — | プログラムで判別可能なエラー種別 |
-| `upload_date` | string \| null | yt-dlp | `upload_date` | 投稿日（YYYYMMDD形式） |
+| `upload_date` | string \| null | yt-dlp | `upload_date` | 投稿日（ISO 8601形式: YYYY-MM-DD）。yt-dlpはYYYYMMDD形式で返すため、サービス層でハイフン挿入変換を行う |
 | `duration` | int \| null | yt-dlp | `duration` | 動画の長さ（秒） |
 | `duration_string` | string \| null | yt-dlp | `duration_string` | 動画の長さ（"6:00"形式） |
 | `view_count` | int \| null | yt-dlp | `view_count` | 再生回数 |

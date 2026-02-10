@@ -45,7 +45,7 @@ def test_y1_success_all_data(mock_ydl_class, mock_ytt_class,
     assert result.error_code is None
     assert result.title == "テスト動画タイトル"
     assert result.channel_name == "テストチャンネル"
-    assert result.upload_date == "20260208"
+    assert result.upload_date == "2026-02-08"
     assert result.duration == 360
     assert result.duration_string == "6:00"
     assert result.view_count == 54000
@@ -119,7 +119,7 @@ def test_y3_no_transcript(mock_ydl_class, mock_ytt_class, ytdlp_success_info):
     assert result.success is False
     assert result.error_code == ERROR_TRANSCRIPT_NOT_FOUND
     assert result.title == "テスト動画タイトル"
-    assert result.upload_date == "20260208"
+    assert result.upload_date == "2026-02-08"
     assert result.transcript is None
 
 
@@ -426,7 +426,7 @@ def test_y16_oembed_timeout(mock_ydl_class, mock_ytt_class, mock_requests_get,
     ("https://www.youtube.com/v/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
     ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=120", "dQw4w9WgXcQ"),
     ("https://www.youtube.com/watch?list=PLxxx&v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
-    ("https://www.youtube.com/shorts/dQw4w9WgXcQ", None),  # shorts は現在の正規表現では非対応
+    ("https://www.youtube.com/shorts/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
     ("https://example.com/video", None),
     ("not a url", None),
 ])

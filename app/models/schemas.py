@@ -42,14 +42,14 @@ class SummaryResponse(BaseModel):
     error_code: Optional[str] = Field(None, description="プログラムで判別可能なエラー種別")
 
     # 新規フィールド（安定性 高）
-    upload_date: Optional[str] = Field(None, description="投稿日（YYYYMMDD形式）")
+    upload_date: Optional[str] = Field(None, description="投稿日（ISO 8601形式: YYYY-MM-DD）")
     duration: Optional[int] = Field(None, description="動画の長さ（秒）")
     duration_string: Optional[str] = Field(None, description="動画の長さ（'6:00'形式）")
     view_count: Optional[int] = Field(None, description="再生回数")
     thumbnail_url: Optional[str] = Field(None, description="サムネイルURL")
     description: Optional[str] = Field(None, description="概要欄テキスト")
-    tags: Optional[list] = Field(None, description="タグ一覧")
-    categories: Optional[list] = Field(None, description="カテゴリ一覧")
+    tags: Optional[list[str]] = Field(None, description="タグ一覧")
+    categories: Optional[list[str]] = Field(None, description="カテゴリ一覧")
     channel_id: Optional[str] = Field(None, description="チャンネルID")
     webpage_url: Optional[str] = Field(None, description="正規化された動画URL")
     transcript_language: Optional[str] = Field(None, description="取得できた字幕の言語コード")
@@ -77,7 +77,7 @@ class SummaryResponse(BaseModel):
                     "channel_name": "テストチャンネル",
                     "channel_id": "UCxxxx",
                     "channel_follower_count": 1250000,
-                    "upload_date": "20260208",
+                    "upload_date": "2026-02-08",
                     "duration": 360,
                     "duration_string": "6:00",
                     "view_count": 54000,
