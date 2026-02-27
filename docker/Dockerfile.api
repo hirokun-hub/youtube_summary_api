@@ -1,10 +1,6 @@
 # FastAPI用Dockerfile
-# 要件: 4.2, 4.3, 4.4, 4.5
 
 FROM python:3.12-slim
-
-# Deno（yt-dlp 2025.11.12以降のYouTube完全サポートに必須）
-COPY --from=denoland/deno:bin /deno /usr/local/bin/deno
 
 # 作業ディレクトリを設定
 WORKDIR /app

@@ -1,4 +1,4 @@
-"""テストケース Y-1〜Y-17: サービス層の単体テスト（モック使用）"""
+"""テストケース Y-1〜Y-32: サービス層の単体テスト（モック使用）"""
 
 import logging
 from unittest.mock import patch, MagicMock
@@ -90,8 +90,8 @@ def test_y1_success_all_data(mock_ytt_class, mock_requests_get,
 @patch("app.services.youtube.time.sleep")
 @patch("app.services.youtube.requests.get")
 @patch("app.services.youtube.YouTubeTranscriptApi")
-def test_y2_ytdlp_fallback_oembed(mock_ytt_class, mock_requests_get, mock_sleep,
-                                  oembed_success_json, transcript_fetched_mock):
+def test_y2_v3_fallback_oembed(mock_ytt_class, mock_requests_get, mock_sleep,
+                               oembed_success_json, transcript_fetched_mock):
     """v3がリトライ枯渇してoEmbed成功 + transcript成功 → success=True。"""
     retry_resp = _resp(503, {})
     oembed_resp = _resp(200, oembed_success_json)
@@ -268,7 +268,7 @@ def test_y9_transcript_metadata(mock_ytt_class, mock_requests_get,
     assert result.is_generated is False
 
 
-# --- Y-10: yt-dlp DownloadError → error_code マッピング ---
+# --- Y-10: v3失敗→oEmbedフォールバック + transcript成功 ---
 
 @patch("app.services.youtube.time.sleep")
 @patch("app.services.youtube.requests.get")
@@ -314,11 +314,11 @@ def test_y11_transcript_format(mock_ytt_class, mock_requests_get,
     assert lines[2] == "[01:01:01] 終わりです"
 
 
-# --- Y-12: yt-dlp戻り値にキーが存在しない場合 ---
+# --- Y-12: v3レスポンスのキー欠損 ---
 
 @patch("app.services.youtube.requests.get")
 @patch("app.services.youtube.YouTubeTranscriptApi")
-def test_y12_ytdlp_missing_keys(mock_ytt_class, mock_requests_get, transcript_fetched_mock):
+def test_y12_v3_missing_keys(mock_ytt_class, mock_requests_get, transcript_fetched_mock):
     """v3成功だがレスポンスキー欠損時はnullで返る。"""
     minimal_video_resp = {
         "items": [{

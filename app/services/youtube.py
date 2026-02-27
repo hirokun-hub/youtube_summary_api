@@ -10,7 +10,6 @@ import os
 import time
 import re
 import requests
-import yt_dlp
 from urllib.parse import urlunparse
 from typing import NamedTuple
 
@@ -52,8 +51,6 @@ from app.core.constants import (
     YOUTUBE_CATEGORY_MAP,
     YOUTUBE_THUMBNAIL_PRIORITY,
     YOUTUBE_WATCH_URL_TEMPLATE,
-    YTDLP_DIRECT_KEYS,
-    YTDLP_KEY_MAP,
 )
 
 # このモジュール用のロガーを設定
@@ -339,24 +336,6 @@ def _extract_video_id(url: str) -> str | None:
     return None
 
 
-def _fetch_metadata_ytdlp(video_url: str) -> dict | None:
-    """yt-dlpでメタデータを一括取得する。失敗時はNoneを返す。"""
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "socket_timeout": 30,
-    }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=False)
-            info = ydl.sanitize_info(info)
-            return info
-    except Exception:
-        logger.warning(f"yt-dlpによるメタデータ取得に失敗: {video_url}", exc_info=True)
-        return None
-
-
 def _fetch_metadata_oembed(video_id: str) -> dict | None:
     """oEmbed APIでフォールバック用の最低限メタデータを取得する。失敗時はNoneを返す。"""
     normalized_url = urlunparse(('https', 'www.youtube.com', '/watch', '', f'v={video_id}', ''))
@@ -375,24 +354,6 @@ def _fetch_metadata_oembed(video_id: str) -> dict | None:
         return None
 
 
-def _convert_upload_date(raw: str | None) -> str | None:
-    """yt-dlpのYYYYMMDD形式をISO 8601（YYYY-MM-DD）に変換する。"""
-    if raw and len(raw) == 8:
-        return f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
-    return raw
-
-
-def _build_metadata_from_ytdlp(info: dict) -> dict:
-    """yt-dlpの戻り値からレスポンス用のメタデータdictを構築する。"""
-    result = {}
-    for ytdlp_key, response_field in YTDLP_KEY_MAP.items():
-        result[response_field] = info.get(ytdlp_key)
-    for key in YTDLP_DIRECT_KEYS:
-        result[key] = info.get(key)
-    result["upload_date"] = _convert_upload_date(result.get("upload_date"))
-    return result
-
-
 def get_summary_data(video_url: str) -> SummaryResponse:
     """
     指定されたYouTube動画URLからメタデータと文字起こしを取得し、
@@ -404,17 +365,18 @@ def get_summary_data(video_url: str) -> SummaryResponse:
     3. youtube-transcript-apiで字幕を取得
     4. レスポンスを組み立てて返す
     """
-    logger.info(f"動画情報の取得処理を開始: {video_url}")
+    logger.info("動画情報の取得処理を開始")
 
     # --- 1. URLから動画IDを抽出 ---
     video_id = _extract_video_id(video_url)
     if not video_id:
-        logger.warning(f"URLから動画IDを抽出できませんでした: {video_url}")
+        logger.warning("URLから動画IDを抽出できませんでした")
         return SummaryResponse(
             success=False,
             message=MSG_INVALID_URL,
             error_code=ERROR_INVALID_URL,
         )
+    logger.info("動画ID抽出成功: video_id=%s", video_id)
 
     # --- 2. メタデータ取得（YouTube Data API v3 → oEmbed フォールバック） ---
     metadata = {}
@@ -434,7 +396,7 @@ def get_summary_data(video_url: str) -> SummaryResponse:
         if oembed_data is not None:
             metadata = oembed_data
         else:
-            logger.warning(f"メタデータ取得に全て失敗: {video_url}")
+            logger.warning("メタデータ取得に全て失敗: video_id=%s", video_id)
     else:
         metadata = metadata_fetch_result.metadata or {}
 
@@ -459,16 +421,16 @@ def get_summary_data(video_url: str) -> SummaryResponse:
         logger.debug(f"文字起こし取得成功。文字数: {len(transcript_text)}")
 
     except NoTranscriptFound:
-        logger.warning(f"字幕が見つかりませんでした: {video_url}")
+        logger.warning("字幕が見つかりませんでした: video_id=%s", video_id)
         transcript_error_code = ERROR_TRANSCRIPT_NOT_FOUND
     except TranscriptsDisabled:
-        logger.warning(f"字幕機能が無効化されています: {video_url}")
+        logger.warning("字幕機能が無効化されています: video_id=%s", video_id)
         transcript_error_code = ERROR_TRANSCRIPT_DISABLED
     except (YouTubeRequestFailed, RequestBlocked):
-        logger.error(f"YouTubeへのリクエストがブロックされました: {video_url}")
+        logger.error("YouTubeへのリクエストがブロックされました: video_id=%s", video_id)
         transcript_error_code = ERROR_RATE_LIMITED
     except Exception:
-        logger.error(f"字幕取得中に予期せぬエラー: {video_url}", exc_info=True)
+        logger.error("字幕取得中に予期せぬエラー: video_id=%s", video_id, exc_info=True)
         transcript_error_code = ERROR_INTERNAL
 
     # --- 4. レスポンス組み立て ---

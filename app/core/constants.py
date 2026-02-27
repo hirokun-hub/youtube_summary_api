@@ -64,19 +64,6 @@ YOUTUBE_CATEGORY_MAP = {
     "44": "Trailers",
 }
 
-# --- yt-dlp キー名 → レスポンスフィールド名のマッピング ---
-YTDLP_KEY_MAP = {
-    "channel": "channel_name",
-    "thumbnail": "thumbnail_url",
-}
-
-# yt-dlp の extract_info から取得するキーの一覧（マッピング不要のもの）
-YTDLP_DIRECT_KEYS = [
-    "title", "upload_date", "duration", "duration_string",
-    "view_count", "like_count", "description", "tags",
-    "categories", "channel_id", "channel_follower_count", "webpage_url",
-]
-
 # --- メッセージ ---
 MSG_SUCCESS = "Successfully retrieved data."
 MSG_INVALID_URL = "無効なYouTube動画URLです。有効なURL形式か確認してください。"

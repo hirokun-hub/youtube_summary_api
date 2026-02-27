@@ -112,6 +112,7 @@
 ### GREEN: 実装
 
 - [x] `FetchMetadataResult` NamedTuple を定義（design.md §3.1）
+- [x] `_to_int_or_none(value)` を実装 — 文字列数値→int 変換の共通ヘルパー（`view_count`, `like_count`, `subscriberCount` で使用）
 - [x] `_build_metadata_from_youtube_api(video_data, channel_data, video_id)` を実装（design.md §4.5）
 - [x] `_fetch_metadata_youtube_api(video_id)` を実装（design.md §4.6）
 - [x] `_resolve_error_message(error_code)` を実装（design.md §4.6）
@@ -183,24 +184,52 @@
 
 ### 削除作業
 
-- [ ] `youtube.py` から削除（US-7 受入基準 3）
+- [x] `youtube.py` から削除（US-7 受入基準 3）
   - `import yt_dlp`
   - `from app.core.constants import YTDLP_DIRECT_KEYS, YTDLP_KEY_MAP`
   - `_fetch_metadata_ytdlp()` 関数
   - `_build_metadata_from_ytdlp()` 関数
   - `_convert_upload_date()` 関数
-- [ ] `constants.py` から `YTDLP_KEY_MAP`, `YTDLP_DIRECT_KEYS` を削除（US-7 受入基準 4）
-- [ ] `requirements.txt` から `yt-dlp[default]` を削除（US-7 受入基準 1）
-- [ ] `docker/Dockerfile.api` から Deno インストール行を削除（US-7 受入基準 2）
+- [x] `constants.py` から `YTDLP_KEY_MAP`, `YTDLP_DIRECT_KEYS` を削除（US-7 受入基準 4）
+- [x] `requirements.txt` から `yt-dlp[default]` を削除（US-7 受入基準 1）
+- [x] `docker/Dockerfile.api` から Deno インストール行を削除（US-7 受入基準 2）
 
 ### 追加作業
 
-- [ ] `.env.example` に `YOUTUBE_API_KEY` のプレースホルダーをコメントで追加（US-4 受入基準 3）
+- [x] `.env.example` に `YOUTUBE_API_KEY` のプレースホルダーをコメントで追加（US-4 受入基準 3）
 
 ### 検証
 
-- [ ] **全テスト PASS**
-- [ ] `docker compose build api` でビルド成功
+- [x] **全テスト PASS**
+- [x] `docker compose build api` でビルド成功
+
+---
+
+## コードレビュー指摘対応
+
+> Phase 1〜6 完了後のコードレビューで検出された問題の修正
+
+### 第1回レビュー指摘（5件）
+
+- [x] `docker/Dockerfile.api` から設計書 diff で削除指定のコメント `# 要件: 4.2, 4.3, 4.4, 4.5` を削除
+- [x] `.env.example` の `YOUTUBE_API_KEY` コメントに Google Cloud Console の取得先 URL を追記（設計書 §3.5 準拠）
+- [x] `youtube.py` の `get_summary_data()` 内ログ出力を `video_url` から `video_id` ベースに変更（US-4 受入基準 5: APIキー漏洩防止）
+- [x] `test_youtube_service.py` の docstring を `Y-1〜Y-17` → `Y-1〜Y-32` に更新
+- [x] `test_youtube_service.py` の Y-2 関数名を `test_y2_ytdlp_fallback_oembed` → `test_y2_v3_fallback_oembed` に変更
+
+### 第2回レビュー指摘（1件）
+
+- [x] Y-10 のセクションコメントを `yt-dlp DownloadError` → `v3失敗→oEmbedフォールバック + transcript成功` に更新
+- [x] Y-12 のセクションコメントを `yt-dlp戻り値にキーが存在しない場合` → `v3レスポンスのキー欠損` に更新
+- [x] Y-12 の関数名を `test_y12_ytdlp_missing_keys` → `test_y12_v3_missing_keys` に変更
+
+### 第3回レビュー
+
+- [x] **修正必須の問題点 0件** — Phase 7 進行可能
+
+### 検証
+
+- [x] **全テスト PASS**（85 passed）
 
 ---
 
