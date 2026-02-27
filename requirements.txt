@@ -3,5 +3,4 @@ uvicorn==0.35.0
 pydantic==2.9.2
 python-dotenv==1.1.1
 requests==2.32.4
-yt-dlp[default]
 youtube-transcript-api>=1.2.0

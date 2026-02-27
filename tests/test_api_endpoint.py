@@ -1,6 +1,6 @@
 """テストケース E-1〜E-7: APIエンドポイントの統合テスト"""
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from app.core.constants import (
     ERROR_INVALID_URL,
@@ -12,10 +12,19 @@ ENDPOINT = "/api/v1/summary"
 VALID_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
 
-def _make_ytdlp_mock(mock_ydl_class, info):
-    mock_ydl = mock_ydl_class.return_value.__enter__.return_value
-    mock_ydl.extract_info.return_value = info
-    mock_ydl.sanitize_info.return_value = info
+def _resp(status_code: int, payload: dict):
+    response = MagicMock()
+    response.status_code = status_code
+    response.json.return_value = payload
+    response.raise_for_status.return_value = None
+    return response
+
+
+def _make_v3_api_mock(mock_get, video_response: dict, channel_response: dict | None = None):
+    side_effects = [_resp(200, video_response)]
+    if channel_response is not None:
+        side_effects.append(_resp(200, channel_response))
+    mock_get.side_effect = side_effects
 
 
 def _make_transcript_mock(mock_ytt_class, language_code="ja", is_generated=False):
@@ -29,31 +38,42 @@ def _make_transcript_mock(mock_ytt_class, language_code="ja", is_generated=False
     mock_ytt.fetch.return_value = mock_fetched
 
 
-YTDLP_INFO = {
-    "title": "統合テスト動画",
-    "channel": "統合テストチャンネル",
-    "channel_id": "UCtest",
-    "channel_follower_count": 100,
-    "upload_date": "2026-02-10",
-    "duration": 120,
-    "duration_string": "2:00",
-    "view_count": 1000,
-    "like_count": 50,
-    "thumbnail": "https://i.ytimg.com/vi/test/maxresdefault.jpg",
-    "description": "統合テスト",
-    "tags": ["test"],
-    "categories": ["Science"],
-    "webpage_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+V3_VIDEO_RESPONSE = {
+    "items": [{
+        "snippet": {
+            "title": "統合テスト動画",
+            "channelTitle": "統合テストチャンネル",
+            "channelId": "UCtest",
+            "publishedAt": "2026-02-10T00:00:00Z",
+            "description": "統合テスト",
+            "thumbnails": {
+                "maxres": {"url": "https://i.ytimg.com/vi/test/maxresdefault.jpg"},
+            },
+            "tags": ["test"],
+            "categoryId": "28",
+        },
+        "contentDetails": {"duration": "PT2M"},
+        "statistics": {"viewCount": "1000", "likeCount": "50"},
+    }]
+}
+
+V3_CHANNEL_RESPONSE = {
+    "items": [{
+        "statistics": {
+            "subscriberCount": "100",
+            "hiddenSubscriberCount": False,
+        }
+    }]
 }
 
 
 # --- E-1: 正常リクエスト ---
 
+@patch("app.services.youtube.requests.get")
 @patch("app.services.youtube.YouTubeTranscriptApi")
-@patch("app.services.youtube.yt_dlp.YoutubeDL")
-def test_e1_success(mock_ydl_class, mock_ytt_class, client):
+def test_e1_success(mock_ytt_class, mock_get, client):
     """POST /api/v1/summary → 200, 全フィールド存在"""
-    _make_ytdlp_mock(mock_ydl_class, YTDLP_INFO)
+    _make_v3_api_mock(mock_get, V3_VIDEO_RESPONSE, V3_CHANNEL_RESPONSE)
     _make_transcript_mock(mock_ytt_class)
 
     resp = client.post(ENDPOINT, json={"url": VALID_URL})
@@ -74,7 +94,7 @@ def test_e1_success(mock_ydl_class, mock_ytt_class, client):
     assert data["thumbnail_url"] == "https://i.ytimg.com/vi/test/maxresdefault.jpg"
     assert data["description"] == "統合テスト"
     assert data["tags"] == ["test"]
-    assert data["categories"] == ["Science"]
+    assert data["categories"] == ["Science & Technology"]
     assert data["channel_id"] == "UCtest"
     assert data["channel_follower_count"] == 100
     assert data["webpage_url"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
@@ -93,9 +113,7 @@ def test_e2_no_api_key(client_no_auth_override):
 
 # --- E-3: 無効なURL ---
 
-@patch("app.services.youtube.YouTubeTranscriptApi")
-@patch("app.services.youtube.yt_dlp.YoutubeDL")
-def test_e3_invalid_url(mock_ydl_class, mock_ytt_class, client):
+def test_e3_invalid_url(client):
     """POST → 200, success=False, error_code=INVALID_URL"""
     resp = client.post(ENDPOINT, json={"url": "https://example.com/not-youtube"})
 
@@ -107,13 +125,13 @@ def test_e3_invalid_url(mock_ydl_class, mock_ytt_class, client):
 
 # --- E-4: 字幕なし動画 ---
 
+@patch("app.services.youtube.requests.get")
 @patch("app.services.youtube.YouTubeTranscriptApi")
-@patch("app.services.youtube.yt_dlp.YoutubeDL")
-def test_e4_no_transcript(mock_ydl_class, mock_ytt_class, client):
+def test_e4_no_transcript(mock_ytt_class, mock_get, client):
     """POST → 200, success=False, error_code=TRANSCRIPT_NOT_FOUND, メタデータあり"""
     from youtube_transcript_api import NoTranscriptFound
 
-    _make_ytdlp_mock(mock_ydl_class, YTDLP_INFO)
+    _make_v3_api_mock(mock_get, V3_VIDEO_RESPONSE, V3_CHANNEL_RESPONSE)
     mock_ytt = mock_ytt_class.return_value
     mock_ytt.fetch.side_effect = NoTranscriptFound("dQw4w9WgXcQ", ["ja", "en"], {})
 
@@ -129,17 +147,16 @@ def test_e4_no_transcript(mock_ydl_class, mock_ytt_class, client):
 
 # --- E-5: 後方互換性 ---
 
+@patch("app.services.youtube.requests.get")
 @patch("app.services.youtube.YouTubeTranscriptApi")
-@patch("app.services.youtube.yt_dlp.YoutubeDL")
-def test_e5_backward_compatibility(mock_ydl_class, mock_ytt_class, client):
+def test_e5_backward_compatibility(mock_ytt_class, mock_get, client):
     """レスポンスJSONに既存5フィールドが含まれ、型が正しい"""
-    _make_ytdlp_mock(mock_ydl_class, YTDLP_INFO)
+    _make_v3_api_mock(mock_get, V3_VIDEO_RESPONSE, V3_CHANNEL_RESPONSE)
     _make_transcript_mock(mock_ytt_class)
 
     resp = client.post(ENDPOINT, json={"url": VALID_URL})
     data = resp.json()
 
-    # 既存5フィールドの存在と型
     assert isinstance(data["success"], bool)
     assert isinstance(data["message"], str)
     assert isinstance(data["title"], str)
@@ -149,19 +166,23 @@ def test_e5_backward_compatibility(mock_ydl_class, mock_ytt_class, client):
 
 # --- E-6: status フィールド ---
 
+@patch("app.services.youtube.requests.get")
 @patch("app.services.youtube.YouTubeTranscriptApi")
-@patch("app.services.youtube.yt_dlp.YoutubeDL")
-def test_e6_status_field(mock_ydl_class, mock_ytt_class, client):
+def test_e6_status_field(mock_ytt_class, mock_get, client):
     """成功時 status='ok'、失敗時 status='error'"""
     from youtube_transcript_api import NoTranscriptFound
 
-    # 成功ケース
-    _make_ytdlp_mock(mock_ydl_class, YTDLP_INFO)
+    mock_get.side_effect = [
+        _resp(200, V3_VIDEO_RESPONSE),
+        _resp(200, V3_CHANNEL_RESPONSE),
+        _resp(200, V3_VIDEO_RESPONSE),
+        _resp(200, V3_CHANNEL_RESPONSE),
+    ]
+
     _make_transcript_mock(mock_ytt_class)
     resp_ok = client.post(ENDPOINT, json={"url": VALID_URL})
     assert resp_ok.json()["status"] == "ok"
 
-    # 失敗ケース
     mock_ytt = mock_ytt_class.return_value
     mock_ytt.fetch.side_effect = NoTranscriptFound("dQw4w9WgXcQ", ["ja", "en"], {})
     resp_err = client.post(ENDPOINT, json={"url": VALID_URL})
@@ -170,11 +191,11 @@ def test_e6_status_field(mock_ydl_class, mock_ytt_class, client):
 
 # --- E-7: transcript_language, is_generated がレスポンスに含まれる ---
 
+@patch("app.services.youtube.requests.get")
 @patch("app.services.youtube.YouTubeTranscriptApi")
-@patch("app.services.youtube.yt_dlp.YoutubeDL")
-def test_e7_transcript_metadata_in_response(mock_ydl_class, mock_ytt_class, client):
+def test_e7_transcript_metadata_in_response(mock_ytt_class, mock_get, client):
     """成功時に transcript_language と is_generated が設定されている"""
-    _make_ytdlp_mock(mock_ydl_class, YTDLP_INFO)
+    _make_v3_api_mock(mock_get, V3_VIDEO_RESPONSE, V3_CHANNEL_RESPONSE)
     _make_transcript_mock(mock_ytt_class, language_code="en", is_generated=True)
 
     resp = client.post(ENDPOINT, json={"url": VALID_URL})
