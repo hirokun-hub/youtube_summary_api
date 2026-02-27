@@ -34,29 +34,6 @@ def client_no_auth_override():
     app.dependency_overrides.clear()
 
 
-# --- yt-dlp テスト用固定データ ---
-
-@pytest.fixture
-def ytdlp_success_info():
-    """yt-dlp extract_info の成功レスポンス"""
-    return {
-        "title": "テスト動画タイトル",
-        "channel": "テストチャンネル",
-        "channel_id": "UCxxxxxxxxxxxxxxxxxxxx",
-        "channel_follower_count": 1250000,
-        "upload_date": "20260208",
-        "duration": 360,
-        "duration_string": "6:00",
-        "view_count": 54000,
-        "like_count": 1200,
-        "thumbnail": "https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg",
-        "description": "これはテスト動画の概要欄です。",
-        "tags": ["Python", "Tutorial"],
-        "categories": ["Education"],
-        "webpage_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    }
-
-
 @pytest.fixture
 def oembed_success_json():
     """oEmbed API の成功レスポンス"""

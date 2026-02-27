@@ -99,27 +99,27 @@
 
 ### RED: テスト追加
 
-- [ ] Y-21: `test_y21_category_conversion` — 4パターン parametrize、`_build_metadata_from_youtube_api` 経由（design.md §7.2）
-- [ ] Y-26: `test_y26_fetch_metadata_success` — videos.list + channels.list 正常系（design.md §7.3）
-- [ ] Y-27: `test_y27_video_not_found` — items 空（design.md §7.3）
-- [ ] Y-28: `test_y28_quota_exceeded` — 403 quotaExceeded（design.md §7.3）
-- [ ] Y-29: `test_y29_channels_partial_success` — channels.list 失敗でも `channel_follower_count=None` で成功（design.md §7.3）
-- [ ] Y-30: `test_y30_api_key_not_set` — `monkeypatch.delenv("YOUTUBE_API_KEY", raising=False)` で autouse フィクスチャを上書きし、即 INTERNAL_ERROR を検証（design.md §7.3、US-4 受入基準 4）
-- [ ] Y-30b: `test_y30b_api_key_not_set_no_transcript_call` — 同じく `monkeypatch.delenv` で未設定化。短絡終了し字幕API/oEmbed が呼ばれないことを検証（design.md §7.3）
-- [ ] Y-31: `test_y31_quota_exceeded_message` — `RATE_LIMITED` + `MSG_QUOTA_EXCEEDED` + 短絡終了（design.md §7.3）
-- [ ] Y-32: `test_y32_5xx_fallback_to_oembed` — リトライ枯渇→oEmbed→字幕成功（design.md §7.3）
+- [x] Y-21: `test_y21_category_conversion` — 4パターン parametrize、`_build_metadata_from_youtube_api` 経由（design.md §7.2）
+- [x] Y-26: `test_y26_fetch_metadata_success` — videos.list + channels.list 正常系（design.md §7.3）
+- [x] Y-27: `test_y27_video_not_found` — items 空（design.md §7.3）
+- [x] Y-28: `test_y28_quota_exceeded` — 403 quotaExceeded（design.md §7.3）
+- [x] Y-29: `test_y29_channels_partial_success` — channels.list 失敗でも `channel_follower_count=None` で成功（design.md §7.3）
+- [x] Y-30: `test_y30_api_key_not_set` — `monkeypatch.delenv("YOUTUBE_API_KEY", raising=False)` で autouse フィクスチャを上書きし、即 INTERNAL_ERROR を検証（design.md §7.3、US-4 受入基準 4）
+- [x] Y-30b: `test_y30b_api_key_not_set_no_transcript_call` — 同じく `monkeypatch.delenv` で未設定化。短絡終了し字幕API/oEmbed が呼ばれないことを検証（design.md §7.3）
+- [x] Y-31: `test_y31_quota_exceeded_message` — `RATE_LIMITED` + `MSG_QUOTA_EXCEEDED` + 短絡終了（design.md §7.3）
+- [x] Y-32: `test_y32_5xx_fallback_to_oembed` — リトライ枯渇→oEmbed→字幕成功（design.md §7.3）
 
 ### GREEN: 実装
 
-- [ ] `FetchMetadataResult` NamedTuple を定義（design.md §3.1）
-- [ ] `_build_metadata_from_youtube_api(video_data, channel_data, video_id)` を実装（design.md §4.5）
-- [ ] `_fetch_metadata_youtube_api(video_id)` を実装（design.md §4.6）
-- [ ] `_resolve_error_message(error_code)` を実装（design.md §4.6）
+- [x] `FetchMetadataResult` NamedTuple を定義（design.md §3.1）
+- [x] `_build_metadata_from_youtube_api(video_data, channel_data, video_id)` を実装（design.md §4.5）
+- [x] `_fetch_metadata_youtube_api(video_id)` を実装（design.md §4.6）
+- [x] `_resolve_error_message(error_code)` を実装（design.md §4.6）
 
 ### 検証
 
-- [ ] Y-21, Y-26〜Y-32 が全て PASS
-- [ ] 既存テスト + Phase 2〜3 テストが引き続き PASS
+- [x] Y-21, Y-26〜Y-32 が全て PASS
+- [x] 既存テスト + Phase 2〜3 テストが引き続き PASS
 
 ---
 
@@ -130,7 +130,7 @@
 
 ### 実装
 
-- [ ] `get_summary_data()` のメインフローを書き換え（design.md §4.6）
+- [x] `get_summary_data()` のメインフローを書き換え（design.md §4.6）
   - `_fetch_metadata_youtube_api()` を呼び出し
   - 3分岐: (1) 即時エラー返却、(2) oEmbed フォールバック、(3) 正常系
   - `_resolve_error_message()` でクォータ超過と字幕API起因の message 出し分け
@@ -138,42 +138,42 @@
 
 ### 既存テスト更新（v3 API モック形式に全面書き換え）
 
-- [ ] Y-1: yt-dlp mock → requests.get mock（videos.list + channels.list）、全フィールド期待値更新
-- [ ] Y-2: yt-dlp 失敗 → v3 API 全リトライ失敗→oEmbed フォールバック
-- [ ] Y-3: メタデータ成功 mock を v3 形式に変更、字幕エラー検証は維持
-- [ ] Y-4: DownloadError → items=[] に変更
-- [ ] Y-6: v3 形式でメタデータ成功 + 字幕 YouTubeRequestFailed、**`message == MSG_RATE_LIMITED` アサート追加**（回帰防止）
-- [ ] Y-7: v3 形式に更新
-- [ ] Y-8: `likeCount` フィールド欠損の v3 レスポンス
-- [ ] Y-10: v3 API 失敗 + oEmbed フォールバック成功 + 字幕成功
-- [ ] Y-12: v3 レスポンスの一部フィールド欠損ケース
-- [ ] Y-14: メタデータ成功 mock を v3 形式に変更
-- [ ] Y-15: v3 形式に更新、**`message == MSG_RATE_LIMITED` アサート追加**（回帰防止）
-- [ ] Y-16: v3 API 失敗 → oEmbed タイムアウト
-- [ ] Y-5, Y-11, Y-13, Y-17: 変更不要であることを確認
+- [x] Y-1: yt-dlp mock → requests.get mock（videos.list + channels.list）、全フィールド期待値更新
+- [x] Y-2: yt-dlp 失敗 → v3 API 全リトライ失敗→oEmbed フォールバック
+- [x] Y-3: メタデータ成功 mock を v3 形式に変更、字幕エラー検証は維持
+- [x] Y-4: DownloadError → items=[] に変更
+- [x] Y-6: v3 形式でメタデータ成功 + 字幕 YouTubeRequestFailed、**`message == MSG_RATE_LIMITED` アサート追加**（回帰防止）
+- [x] Y-7: v3 形式に更新
+- [x] Y-8: `likeCount` フィールド欠損の v3 レスポンス
+- [x] Y-10: v3 API 失敗 + oEmbed フォールバック成功 + 字幕成功
+- [x] Y-12: v3 レスポンスの一部フィールド欠損ケース
+- [x] Y-14: メタデータ成功 mock を v3 形式に変更
+- [x] Y-15: v3 形式に更新、**`message == MSG_RATE_LIMITED` アサート追加**（回帰防止）
+- [x] Y-16: v3 API 失敗 → oEmbed タイムアウト
+- [x] Y-5, Y-11, Y-13, Y-17: 変更不要であることを確認
 
 ### テスト基盤更新
 
-- [ ] `test_youtube_service.py` の import に `MSG_RATE_LIMITED`, `MSG_QUOTA_EXCEEDED` を追加
-- [ ] `conftest.py` から `ytdlp_success_info` フィクスチャを削除
+- [x] `test_youtube_service.py` の import に `MSG_RATE_LIMITED`, `MSG_QUOTA_EXCEEDED` を追加
+- [x] `conftest.py` から `ytdlp_success_info` フィクスチャを削除
 
 ### `test_api_endpoint.py` の v3 移行（E-1〜E-7）
 
 > `test_api_endpoint.py` は全6テスト（E-1, E-3〜E-7）で `@patch("app.services.youtube.yt_dlp.YoutubeDL")` に依存。
 > Phase 6 で yt-dlp を削除する前にモック形式を移行しないとテストが破綻する。
 
-- [ ] `_make_ytdlp_mock` ヘルパーを `_make_v3_api_mock` に置換（requests.get の side_effect で videos.list + channels.list を返す）
-- [ ] `YTDLP_INFO` dict を v3 形式の videos/channels レスポンスに置換
-- [ ] E-1: `@patch("app.services.youtube.yt_dlp.YoutubeDL")` → `@patch("app.services.youtube.requests.get")`、全フィールド期待値を v3 変換結果に更新
-- [ ] E-3: 同上（URL 検証テストのためモック差し替えのみ）
-- [ ] E-4: 同上（字幕エラー検証は維持、メタデータ mock を v3 形式に）
-- [ ] E-5: 同上（後方互換性フィールドの型検証を v3 形式で）
-- [ ] E-6: 同上（status フィールド検証を v3 形式で）
-- [ ] E-7: 同上（transcript_language, is_generated 検証を v3 形式で）
+- [x] `_make_ytdlp_mock` ヘルパーを `_make_v3_api_mock` に置換（requests.get の side_effect で videos.list + channels.list を返す）
+- [x] `YTDLP_INFO` dict を v3 形式の videos/channels レスポンスに置換
+- [x] E-1: `@patch("app.services.youtube.yt_dlp.YoutubeDL")` → `@patch("app.services.youtube.requests.get")`、全フィールド期待値を v3 変換結果に更新
+- [x] E-3: URL 検証テストのため API モック不要（`@patch` デコレータなし、変更不要を確認）
+- [x] E-4: 同上（字幕エラー検証は維持、メタデータ mock を v3 形式に）
+- [x] E-5: 同上（後方互換性フィールドの型検証を v3 形式で）
+- [x] E-6: 同上（status フィールド検証を v3 形式で）
+- [x] E-7: 同上（transcript_language, is_generated 検証を v3 形式で）
 
 ### 検証
 
-- [ ] **全テスト PASS**（Y-1〜Y-17 更新済み + Y-18〜Y-32 新規 + E-1〜E-7 更新済み）
+- [x] **全テスト PASS**（Y-1〜Y-17 更新済み + Y-18〜Y-32 新規 + E-1〜E-7 更新済み）
 
 ---
 

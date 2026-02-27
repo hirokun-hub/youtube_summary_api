@@ -6,6 +6,7 @@
 """
 
 import logging
+import os
 import time
 import re
 import requests
@@ -32,6 +33,7 @@ from app.core.constants import (
     ERROR_TRANSCRIPT_NOT_FOUND,
     ERROR_VIDEO_NOT_FOUND,
     MSG_INTERNAL_ERROR,
+    MSG_QUOTA_EXCEEDED,
     MSG_INVALID_URL,
     MSG_METADATA_FAILED,
     MSG_SUCCESS,
@@ -39,11 +41,17 @@ from app.core.constants import (
     OEMBED_TIMEOUT_SECONDS,
     OEMBED_URL_TEMPLATE,
     TRANSCRIPT_LANGUAGES,
+    YOUTUBE_API_V3_CHANNELS_PART,
+    YOUTUBE_API_V3_CHANNELS_URL,
     YOUTUBE_API_V3_MAX_RETRIES,
     YOUTUBE_API_V3_RETRY_BASE_DELAY,
     YOUTUBE_API_V3_RETRY_STATUS_CODES,
     YOUTUBE_API_V3_TIMEOUT,
+    YOUTUBE_API_V3_VIDEOS_PART,
+    YOUTUBE_API_V3_VIDEOS_URL,
+    YOUTUBE_CATEGORY_MAP,
     YOUTUBE_THUMBNAIL_PRIORITY,
+    YOUTUBE_WATCH_URL_TEMPLATE,
     YTDLP_DIRECT_KEYS,
     YTDLP_KEY_MAP,
 )
@@ -61,6 +69,13 @@ class ApiCallResult(NamedTuple):
     data: dict | None
     error_code: str | None
     is_retryable_failure: bool
+
+
+class FetchMetadataResult(NamedTuple):
+    """メタデータ取得処理の結果を表す。"""
+    metadata: dict | None
+    error_code: str | None
+    should_fallback: bool
 
 
 def _extract_api_error_reason(error_body: dict | None) -> str | None:
@@ -204,6 +219,113 @@ def _select_best_thumbnail(thumbnails: dict | None) -> str | None:
     return None
 
 
+def _to_int_or_none(value: str | None) -> int | None:
+    """文字列数値を int に変換し、失敗時は None を返す。"""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_metadata_from_youtube_api(video_data: dict, channel_data: dict | None, video_id: str) -> dict:
+    """YouTube Data API v3 レスポンスからメタデータ dict を構築する。"""
+    snippet = video_data.get("snippet", {})
+    content_details = video_data.get("contentDetails", {})
+    statistics = video_data.get("statistics", {})
+
+    duration_seconds = _parse_iso8601_duration(content_details.get("duration"))
+
+    category_id = snippet.get("categoryId")
+    categories = None
+    if category_id is not None:
+        categories = [YOUTUBE_CATEGORY_MAP.get(category_id, category_id)]
+
+    channel_follower_count = None
+    if isinstance(channel_data, dict):
+        channel_statistics = channel_data.get("statistics", {})
+        hidden_subscriber_count = channel_statistics.get("hiddenSubscriberCount")
+        if hidden_subscriber_count is not True:
+            channel_follower_count = _to_int_or_none(channel_statistics.get("subscriberCount"))
+
+    published_at = snippet.get("publishedAt")
+    upload_date = None
+    if isinstance(published_at, str) and len(published_at) >= 10:
+        upload_date = published_at[:10]
+
+    return {
+        "title": snippet.get("title"),
+        "channel_name": snippet.get("channelTitle"),
+        "channel_id": snippet.get("channelId"),
+        "channel_follower_count": channel_follower_count,
+        "upload_date": upload_date,
+        "duration": duration_seconds,
+        "duration_string": _format_duration_string(duration_seconds),
+        "view_count": _to_int_or_none(statistics.get("viewCount")),
+        "like_count": _to_int_or_none(statistics.get("likeCount")),
+        "thumbnail_url": _select_best_thumbnail(snippet.get("thumbnails")),
+        "description": snippet.get("description"),
+        "tags": snippet.get("tags"),
+        "categories": categories,
+        "webpage_url": YOUTUBE_WATCH_URL_TEMPLATE.format(video_id=video_id),
+    }
+
+
+def _fetch_metadata_youtube_api(video_id: str) -> FetchMetadataResult:
+    """YouTube Data API v3 からメタデータを取得する。"""
+    youtube_api_key = os.getenv("YOUTUBE_API_KEY")
+    if not youtube_api_key:
+        logger.error("YOUTUBE_API_KEY が設定されていません")
+        return FetchMetadataResult(metadata=None, error_code=ERROR_INTERNAL, should_fallback=False)
+
+    videos_result = _call_youtube_api_with_retry(
+        YOUTUBE_API_V3_VIDEOS_URL,
+        {
+            "part": YOUTUBE_API_V3_VIDEOS_PART,
+            "id": video_id,
+            "key": youtube_api_key,
+        },
+    )
+
+    if videos_result.error_code:
+        return FetchMetadataResult(metadata=None, error_code=videos_result.error_code, should_fallback=False)
+
+    if videos_result.is_retryable_failure:
+        return FetchMetadataResult(metadata=None, error_code=None, should_fallback=True)
+
+    items = (videos_result.data or {}).get("items", [])
+    if not items:
+        return FetchMetadataResult(metadata=None, error_code=ERROR_VIDEO_NOT_FOUND, should_fallback=False)
+
+    video_data = items[0]
+    channel_id = video_data.get("snippet", {}).get("channelId")
+
+    channel_data = None
+    if channel_id:
+        channels_result = _call_youtube_api_with_retry(
+            YOUTUBE_API_V3_CHANNELS_URL,
+            {
+                "part": YOUTUBE_API_V3_CHANNELS_PART,
+                "id": channel_id,
+                "key": youtube_api_key,
+            },
+        )
+        if channels_result.data:
+            channel_items = channels_result.data.get("items", [])
+            channel_data = channel_items[0] if channel_items else None
+
+    metadata = _build_metadata_from_youtube_api(video_data, channel_data, video_id)
+    return FetchMetadataResult(metadata=metadata, error_code=None, should_fallback=False)
+
+
+def _resolve_error_message(error_code: str) -> str:
+    """YouTube API 起因の error_code を message に変換する。"""
+    if error_code == ERROR_RATE_LIMITED:
+        return MSG_QUOTA_EXCEEDED
+    return ERROR_CODE_TO_MESSAGE.get(error_code, MSG_INTERNAL_ERROR)
+
+
 def _extract_video_id(url: str) -> str | None:
     """
     様々な形式のYouTube URLから動画IDを抽出します。
@@ -278,7 +400,7 @@ def get_summary_data(video_url: str) -> SummaryResponse:
 
     処理順序:
     1. URLから動画IDを抽出
-    2. yt-dlpでメタデータを取得（失敗時はoEmbedにフォールバック）
+    2. YouTube Data API v3でメタデータを取得（5xx/ネットワーク時のみoEmbedにフォールバック）
     3. youtube-transcript-apiで字幕を取得
     4. レスポンスを組み立てて返す
     """
@@ -294,20 +416,27 @@ def get_summary_data(video_url: str) -> SummaryResponse:
             error_code=ERROR_INVALID_URL,
         )
 
-    # --- 2. メタデータ取得（yt-dlp → oEmbed フォールバック） ---
+    # --- 2. メタデータ取得（YouTube Data API v3 → oEmbed フォールバック） ---
     metadata = {}
-    ytdlp_failed = False
+    metadata_fetch_result = _fetch_metadata_youtube_api(video_id)
+    api_failed = False
 
-    ytdlp_info = _fetch_metadata_ytdlp(video_url)
-    if ytdlp_info is not None:
-        metadata = _build_metadata_from_ytdlp(ytdlp_info)
-    else:
-        ytdlp_failed = True
+    if metadata_fetch_result.error_code and not metadata_fetch_result.should_fallback:
+        return SummaryResponse(
+            success=False,
+            message=_resolve_error_message(metadata_fetch_result.error_code),
+            error_code=metadata_fetch_result.error_code,
+        )
+
+    if metadata_fetch_result.should_fallback:
+        api_failed = True
         oembed_data = _fetch_metadata_oembed(video_id)
         if oembed_data is not None:
             metadata = oembed_data
         else:
             logger.warning(f"メタデータ取得に全て失敗: {video_url}")
+    else:
+        metadata = metadata_fetch_result.metadata or {}
 
     # --- 3. 字幕取得 ---
     transcript_text = None
@@ -345,7 +474,7 @@ def get_summary_data(video_url: str) -> SummaryResponse:
     # --- 4. レスポンス組み立て ---
     success = transcript_text is not None
     if success:
-        if ytdlp_failed:
+        if api_failed:
             error_code = ERROR_METADATA_FAILED
             message = MSG_METADATA_FAILED
         else:
@@ -356,7 +485,7 @@ def get_summary_data(video_url: str) -> SummaryResponse:
         message = ERROR_CODE_TO_MESSAGE.get(error_code, MSG_INTERNAL_ERROR)
 
         # メタデータもなければ VIDEO_NOT_FOUND
-        if not metadata and ytdlp_failed:
+        if not metadata and api_failed:
             error_code = ERROR_VIDEO_NOT_FOUND
             message = MSG_VIDEO_NOT_FOUND
 
