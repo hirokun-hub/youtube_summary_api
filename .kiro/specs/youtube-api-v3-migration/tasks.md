@@ -18,7 +18,7 @@
 
 > design.md Phase 1 | 変更ファイル: `app/core/constants.py`, `tests/conftest.py`
 
-- [ ] `constants.py` に v3 関連定数を追加（US-1, US-2, US-5）
+- [x] `constants.py` に v3 関連定数を追加（US-1, US-2, US-5）
   - `YOUTUBE_API_V3_VIDEOS_URL`, `YOUTUBE_API_V3_CHANNELS_URL`
   - `YOUTUBE_API_V3_VIDEOS_PART = "snippet,contentDetails,statistics"` — videos.list の part パラメータ
   - `YOUTUBE_API_V3_CHANNELS_PART = "statistics"` — channels.list の part パラメータ
@@ -28,13 +28,13 @@
   - `YOUTUBE_THUMBNAIL_PRIORITY`
   - `YOUTUBE_CATEGORY_MAP`（全32カテゴリ）
   - `MSG_QUOTA_EXCEEDED`
-- [ ] `conftest.py` に v3 フィクスチャを追加
+- [x] `conftest.py` に v3 フィクスチャを追加
   - `youtube_api_v3_video_response`
   - `youtube_api_v3_channel_response`
   - `youtube_api_v3_empty_response`
   - `youtube_api_v3_quota_error`
-- [ ] `conftest.py` に `YOUTUBE_API_KEY` autouse フィクスチャを追加（design.md §7.7）
-- [ ] **検証:** 既存テスト（Y-1〜Y-17）が全て PASS すること
+- [x] `conftest.py` に `YOUTUBE_API_KEY` autouse フィクスチャを追加（design.md §7.7）
+- [x] **検証:** 既存テスト（Y-1〜Y-17）が全て PASS すること
 
 ---
 
@@ -45,20 +45,20 @@
 
 ### RED: テスト追加
 
-- [ ] Y-18: `test_y18_parse_iso8601_duration` — 8パターン parametrize（design.md §4.1）
-- [ ] Y-19: `test_y19_format_duration_string` — 6パターン parametrize（design.md §4.2）
-- [ ] Y-20: `test_y20_select_best_thumbnail` — 6パターン parametrize（design.md §4.3）
+- [x] Y-18: `test_y18_parse_iso8601_duration` — 8パターン parametrize（design.md §4.1）
+- [x] Y-19: `test_y19_format_duration_string` — 6パターン parametrize（design.md §4.2）
+- [x] Y-20: `test_y20_select_best_thumbnail` — 6パターン parametrize（design.md §4.3）
 
 ### GREEN: 実装
 
-- [ ] `_parse_iso8601_duration(duration_str)` を実装（design.md §4.1）
-- [ ] `_format_duration_string(total_seconds)` を実装（design.md §4.2）
-- [ ] `_select_best_thumbnail(thumbnails)` を実装（design.md §4.3）
+- [x] `_parse_iso8601_duration(duration_str)` を実装（design.md §4.1）
+- [x] `_format_duration_string(total_seconds)` を実装（design.md §4.2）
+- [x] `_select_best_thumbnail(thumbnails)` を実装（design.md §4.3）
 
 ### 検証
 
-- [ ] Y-18, Y-19, Y-20 が全て PASS
-- [ ] 既存テスト（Y-1〜Y-17）が引き続き PASS
+- [x] Y-18, Y-19, Y-20 が全て PASS
+- [x] 既存テスト（Y-1〜Y-17）が引き続き PASS
 
 ---
 

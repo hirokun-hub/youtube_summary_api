@@ -15,7 +15,13 @@ from app.core.constants import (
     MSG_SUCCESS,
     TRANSCRIPT_LANGUAGES,
 )
-from app.services.youtube import get_summary_data, _extract_video_id
+from app.services.youtube import (
+    _extract_video_id,
+    _format_duration_string,
+    _parse_iso8601_duration,
+    _select_best_thumbnail,
+    get_summary_data,
+)
 
 
 VALID_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
@@ -433,3 +439,80 @@ def test_y16_oembed_timeout(mock_ydl_class, mock_ytt_class, mock_requests_get,
 def test_y17_video_id_extraction(url, expected_id):
     """様々なURL形式から正しくvideo_idが抽出される/されない"""
     assert _extract_video_id(url) == expected_id
+
+
+# --- Y-18: ISO 8601 duration を秒数に変換 ---
+
+@pytest.mark.parametrize("input_str,expected", [
+    ("PT1H2M3S", 3723),
+    ("PT30S", 30),
+    ("PT10M", 600),
+    ("P0D", 0),
+    ("PT0S", 0),
+    ("P1DT2H3M4S", 93784),
+    (None, None),
+    ("", None),
+])
+def test_y18_parse_iso8601_duration(input_str, expected):
+    """ISO 8601 duration を仕様どおり秒数に変換する。"""
+    assert _parse_iso8601_duration(input_str) == expected
+
+
+# --- Y-19: 秒数を duration 文字列に変換 ---
+
+@pytest.mark.parametrize("seconds,expected", [
+    (3723, "1:02:03"),
+    (30, "0:30"),
+    (600, "10:00"),
+    (0, "0:00"),
+    (93784, "26:03:04"),
+    (None, None),
+])
+def test_y19_format_duration_string(seconds, expected):
+    """秒数を H:MM:SS または M:SS に変換する。"""
+    assert _format_duration_string(seconds) == expected
+
+
+# --- Y-20: サムネイル優先順位選択 ---
+
+@pytest.mark.parametrize("thumbnails,expected_url", [
+    (
+        {
+            "maxres": {"url": "maxres_url"},
+            "standard": {"url": "std_url"},
+            "high": {"url": "high_url"},
+            "medium": {"url": "med_url"},
+            "default": {"url": "def_url"},
+        },
+        "maxres_url",
+    ),
+    (
+        {
+            "standard": {"url": "std_url"},
+            "high": {"url": "high_url"},
+            "medium": {"url": "med_url"},
+            "default": {"url": "def_url"},
+        },
+        "std_url",
+    ),
+    (
+        {
+            "high": {"url": "high_url"},
+            "medium": {"url": "med_url"},
+            "default": {"url": "def_url"},
+        },
+        "high_url",
+    ),
+    (
+        {
+            "medium": {"url": "med_url"},
+            "default": {"url": "def_url"},
+        },
+        "med_url",
+    ),
+    ({}, None),
+    (None, None),
+])
+def test_y20_select_best_thumbnail(thumbnails, expected_url):
+    """優先順 maxres -> standard -> high -> medium -> default を守って選択する。"""
+    assert _select_best_thumbnail(thumbnails) == expected_url

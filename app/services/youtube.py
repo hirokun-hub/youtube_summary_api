@@ -37,12 +37,67 @@ from app.core.constants import (
     OEMBED_TIMEOUT_SECONDS,
     OEMBED_URL_TEMPLATE,
     TRANSCRIPT_LANGUAGES,
+    YOUTUBE_THUMBNAIL_PRIORITY,
     YTDLP_DIRECT_KEYS,
     YTDLP_KEY_MAP,
 )
 
 # このモジュール用のロガーを設定
 logger = logging.getLogger(__name__)
+
+
+def _parse_iso8601_duration(duration_str: str | None) -> int | None:
+    """ISO 8601 duration 文字列を秒数に変換する。"""
+    if not duration_str:
+        return None
+
+    match = re.fullmatch(
+        r"P(?:(?P<days>\d+)D)?(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?)?",
+        duration_str,
+    )
+    if not match:
+        return None
+
+    days = match.group("days")
+    hours = match.group("hours")
+    minutes = match.group("minutes")
+    seconds = match.group("seconds")
+    if days is None and hours is None and minutes is None and seconds is None:
+        return None
+
+    total_seconds = 0
+    total_seconds += int(days) * 86400 if days else 0
+    total_seconds += int(hours) * 3600 if hours else 0
+    total_seconds += int(minutes) * 60 if minutes else 0
+    total_seconds += int(seconds) if seconds else 0
+    return total_seconds
+
+
+def _format_duration_string(total_seconds: int | None) -> str | None:
+    """秒数を H:MM:SS または M:SS 形式に変換する。"""
+    if total_seconds is None:
+        return None
+
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours >= 1:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
+def _select_best_thumbnail(thumbnails: dict | None) -> str | None:
+    """thumbnails dict から優先順位に従ってURLを1つ選ぶ。"""
+    if not thumbnails:
+        return None
+
+    for key in YOUTUBE_THUMBNAIL_PRIORITY:
+        candidate = thumbnails.get(key)
+        if not isinstance(candidate, dict):
+            continue
+        url = candidate.get("url")
+        if url:
+            return url
+    return None
 
 
 def _extract_video_id(url: str) -> str | None:
