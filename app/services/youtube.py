@@ -6,10 +6,12 @@
 """
 
 import logging
+import time
 import re
 import requests
 import yt_dlp
 from urllib.parse import urlunparse
+from typing import NamedTuple
 
 from youtube_transcript_api import (
     YouTubeTranscriptApi,
@@ -37,6 +39,10 @@ from app.core.constants import (
     OEMBED_TIMEOUT_SECONDS,
     OEMBED_URL_TEMPLATE,
     TRANSCRIPT_LANGUAGES,
+    YOUTUBE_API_V3_MAX_RETRIES,
+    YOUTUBE_API_V3_RETRY_BASE_DELAY,
+    YOUTUBE_API_V3_RETRY_STATUS_CODES,
+    YOUTUBE_API_V3_TIMEOUT,
     YOUTUBE_THUMBNAIL_PRIORITY,
     YTDLP_DIRECT_KEYS,
     YTDLP_KEY_MAP,
@@ -44,6 +50,104 @@ from app.core.constants import (
 
 # このモジュール用のロガーを設定
 logger = logging.getLogger(__name__)
+
+_YT_REASON_QUOTA_EXCEEDED = "quotaExceeded"
+_YT_REASON_FORBIDDEN = "forbidden"
+_YT_REASON_ACCESS_NOT_CONFIGURED = "accessNotConfigured"
+
+
+class ApiCallResult(NamedTuple):
+    """単一 API 呼び出しの結果を表す。"""
+    data: dict | None
+    error_code: str | None
+    is_retryable_failure: bool
+
+
+def _extract_api_error_reason(error_body: dict | None) -> str | None:
+    """YouTube Data API v3 のエラーレスポンスから reason を抽出する。"""
+    if not isinstance(error_body, dict):
+        return None
+    errors = error_body.get("error", {}).get("errors", [])
+    if errors and isinstance(errors[0], dict):
+        return errors[0].get("reason")
+    return None
+
+
+def _classify_api_error(status_code: int, error_body: dict | None) -> str:
+    """YouTube Data API v3 の 4xx エラーを内部 error_code に分類する。"""
+    reason = _extract_api_error_reason(error_body)
+
+    if status_code == 403:
+        if reason == _YT_REASON_QUOTA_EXCEEDED:
+            return ERROR_RATE_LIMITED
+        if reason == _YT_REASON_FORBIDDEN:
+            return ERROR_VIDEO_NOT_FOUND
+        if reason == _YT_REASON_ACCESS_NOT_CONFIGURED:
+            return ERROR_INTERNAL
+        return ERROR_INTERNAL
+    if status_code == 404:
+        return ERROR_VIDEO_NOT_FOUND
+    if 400 <= status_code < 500:
+        return ERROR_INTERNAL
+    return ERROR_INTERNAL
+
+
+def _call_youtube_api_with_retry(url: str, params: dict) -> ApiCallResult:
+    """YouTube Data API をリトライ付きで呼び出す。"""
+    for attempt in range(YOUTUBE_API_V3_MAX_RETRIES + 1):
+        try:
+            response = requests.get(url, params=params, timeout=YOUTUBE_API_V3_TIMEOUT)
+        except requests.exceptions.RequestException:
+            if attempt >= YOUTUBE_API_V3_MAX_RETRIES:
+                logger.warning("YouTube API request failed after retry exhaustion due to network error.")
+                return ApiCallResult(data=None, error_code=None, is_retryable_failure=True)
+
+            delay = YOUTUBE_API_V3_RETRY_BASE_DELAY * (2 ** attempt)
+            logger.warning("YouTube API network error. retry_in=%s", delay)
+            time.sleep(delay)
+            continue
+
+        if response.status_code == 200:
+            try:
+                return ApiCallResult(data=response.json(), error_code=None, is_retryable_failure=False)
+            except ValueError:
+                logger.error("YouTube API returned invalid JSON. status_code=200")
+                return ApiCallResult(data=None, error_code=ERROR_INTERNAL, is_retryable_failure=False)
+
+        if response.status_code in YOUTUBE_API_V3_RETRY_STATUS_CODES:
+            if attempt >= YOUTUBE_API_V3_MAX_RETRIES:
+                logger.warning(
+                    "YouTube API retryable error persisted after retries. status_code=%s",
+                    response.status_code,
+                )
+                return ApiCallResult(data=None, error_code=None, is_retryable_failure=True)
+
+            delay = YOUTUBE_API_V3_RETRY_BASE_DELAY * (2 ** attempt)
+            logger.warning(
+                "YouTube API retryable error. status_code=%s retry_in=%s",
+                response.status_code,
+                delay,
+            )
+            time.sleep(delay)
+            continue
+
+        error_body = None
+        try:
+            error_body = response.json()
+        except ValueError:
+            error_body = None
+
+        error_code = _classify_api_error(response.status_code, error_body)
+        reason = _extract_api_error_reason(error_body)
+        logger.warning(
+            "YouTube API non-retryable error. status_code=%s reason=%s",
+            response.status_code,
+            reason,
+        )
+        return ApiCallResult(data=None, error_code=error_code, is_retryable_failure=False)
+
+    # for ループ内の全パスで return/continue するためここには到達しない
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def _parse_iso8601_duration(duration_str: str | None) -> int | None:

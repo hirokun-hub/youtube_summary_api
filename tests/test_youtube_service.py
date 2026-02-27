@@ -1,6 +1,8 @@
 """テストケース Y-1〜Y-17: サービス層の単体テスト（モック使用）"""
 
+import logging
 from unittest.mock import patch, MagicMock
+from unittest.mock import call
 
 import pytest
 
@@ -16,6 +18,8 @@ from app.core.constants import (
     TRANSCRIPT_LANGUAGES,
 )
 from app.services.youtube import (
+    _call_youtube_api_with_retry,
+    _classify_api_error,
     _extract_video_id,
     _format_duration_string,
     _parse_iso8601_duration,
@@ -516,3 +520,165 @@ def test_y19_format_duration_string(seconds, expected):
 def test_y20_select_best_thumbnail(thumbnails, expected_url):
     """優先順 maxres -> standard -> high -> medium -> default を守って選択する。"""
     assert _select_best_thumbnail(thumbnails) == expected_url
+
+
+# --- Y-22: API エラー分類 ---
+
+@pytest.mark.parametrize("status_code,reason,expected_error_code", [
+    (400, "badRequest", ERROR_INTERNAL),
+    (401, "unauthorized", ERROR_INTERNAL),
+    (403, "quotaExceeded", ERROR_RATE_LIMITED),
+    (403, "forbidden", ERROR_VIDEO_NOT_FOUND),
+    (403, "accessNotConfigured", ERROR_INTERNAL),
+    (403, "otherReason", ERROR_INTERNAL),
+    (404, "notFound", ERROR_VIDEO_NOT_FOUND),
+    (429, None, ERROR_INTERNAL),
+    (418, None, ERROR_INTERNAL),
+])
+def test_y22_classify_api_error(status_code, reason, expected_error_code):
+    """HTTP status と reason を error_code に正しく変換する。"""
+    error_body = {"error": {"errors": [{"reason": reason}]}} if reason else None
+    assert _classify_api_error(status_code, error_body) == expected_error_code
+
+
+# --- Y-23: 503 -> 200 のリトライ成功 ---
+
+@patch("app.services.youtube.time.sleep")
+@patch("app.services.youtube.requests.get")
+def test_y23_retry_then_success(mock_get, mock_sleep):
+    """503 の後に 200 が返ると再試行して成功する。"""
+    url = "https://www.googleapis.com/youtube/v3/videos"
+    params = {"id": "dQw4w9WgXcQ", "key": "test-youtube-api-key"}
+
+    first_response = MagicMock()
+    first_response.status_code = 503
+    first_response.json.return_value = {}
+
+    second_response = MagicMock()
+    second_response.status_code = 200
+    second_response.json.return_value = {"items": [{"id": "dQw4w9WgXcQ"}]}
+
+    mock_get.side_effect = [first_response, second_response]
+
+    result = _call_youtube_api_with_retry(url, params)
+
+    assert result.data == {"items": [{"id": "dQw4w9WgXcQ"}]}
+    assert result.error_code is None
+    assert result.is_retryable_failure is False
+    assert mock_get.call_count == 2
+    mock_sleep.assert_called_once_with(1)
+
+
+# --- Y-24: 全リトライ失敗 ---
+
+@patch("app.services.youtube.time.sleep")
+@patch("app.services.youtube.requests.get")
+def test_y24_all_retries_exhausted(mock_get, mock_sleep):
+    """503 が継続する場合は最大回数までリトライし、retryable failure を返す。"""
+    url = "https://www.googleapis.com/youtube/v3/videos"
+    params = {"id": "dQw4w9WgXcQ", "key": "test-youtube-api-key"}
+
+    response = MagicMock()
+    response.status_code = 503
+    response.json.return_value = {}
+    mock_get.return_value = response
+
+    result = _call_youtube_api_with_retry(url, params)
+
+    assert result.data is None
+    assert result.error_code is None
+    assert result.is_retryable_failure is True
+    assert mock_get.call_count == 4
+    assert mock_sleep.call_args_list == [call(1), call(2), call(4)]
+
+
+# --- Y-25: 4xx はリトライしない ---
+
+@patch("app.services.youtube.time.sleep")
+@patch("app.services.youtube.requests.get")
+def test_y25_4xx_no_retry(mock_get, mock_sleep, youtube_api_v3_quota_error):
+    """403 quotaExceeded はリトライせず RATE_LIMITED を返す。"""
+    url = "https://www.googleapis.com/youtube/v3/videos"
+    params = {"id": "dQw4w9WgXcQ", "key": "test-youtube-api-key"}
+
+    response = MagicMock()
+    response.status_code = 403
+    response.json.return_value = youtube_api_v3_quota_error
+    mock_get.return_value = response
+
+    result = _call_youtube_api_with_retry(url, params)
+
+    assert result.data is None
+    assert result.error_code == ERROR_RATE_LIMITED
+    assert result.is_retryable_failure is False
+    mock_get.assert_called_once()
+    mock_sleep.assert_not_called()
+
+
+# --- Y-25b: ログに API キーを出さない ---
+
+@patch("app.services.youtube.requests.get")
+def test_y25b_no_api_key_in_logs(mock_get, caplog, youtube_api_v3_quota_error):
+    """エラーログに API キーや key= クエリ文字列を含めない。"""
+    url = "https://www.googleapis.com/youtube/v3/videos"
+    api_key = "test-youtube-api-key"
+    params = {"id": "dQw4w9WgXcQ", "key": api_key}
+
+    response = MagicMock()
+    response.status_code = 403
+    response.json.return_value = youtube_api_v3_quota_error
+    mock_get.return_value = response
+
+    with caplog.at_level(logging.WARNING):
+        _call_youtube_api_with_retry(url, params)
+
+    assert api_key not in caplog.text
+    assert "key=" not in caplog.text
+
+
+# --- Y-25c: ネットワーク例外 -> リトライ -> 成功 ---
+
+@patch("app.services.youtube.time.sleep")
+@patch("app.services.youtube.requests.get")
+def test_y25c_network_error_retry_then_success(mock_get, mock_sleep):
+    """RequestException 後に 200 が返ると再試行して成功する。"""
+    from requests.exceptions import ConnectionError
+
+    url = "https://www.googleapis.com/youtube/v3/videos"
+    params = {"id": "dQw4w9WgXcQ", "key": "test-youtube-api-key"}
+
+    success_response = MagicMock()
+    success_response.status_code = 200
+    success_response.json.return_value = {"items": [{"id": "dQw4w9WgXcQ"}]}
+
+    mock_get.side_effect = [ConnectionError("Connection refused"), success_response]
+
+    result = _call_youtube_api_with_retry(url, params)
+
+    assert result.data == {"items": [{"id": "dQw4w9WgXcQ"}]}
+    assert result.error_code is None
+    assert result.is_retryable_failure is False
+    assert mock_get.call_count == 2
+    mock_sleep.assert_called_once_with(1)
+
+
+# --- Y-25d: ネットワーク例外 x 4 -> 全リトライ失敗 ---
+
+@patch("app.services.youtube.time.sleep")
+@patch("app.services.youtube.requests.get")
+def test_y25d_network_error_all_retries_exhausted(mock_get, mock_sleep):
+    """RequestException が継続する場合は retryable failure を返す。"""
+    from requests.exceptions import ConnectionError
+
+    url = "https://www.googleapis.com/youtube/v3/videos"
+    params = {"id": "dQw4w9WgXcQ", "key": "test-youtube-api-key"}
+
+    mock_get.side_effect = ConnectionError("Connection refused")
+
+    result = _call_youtube_api_with_retry(url, params)
+
+    assert result.data is None
+    assert result.error_code is None
+    assert result.is_retryable_failure is True
+    assert mock_get.call_count == 4
+    assert mock_sleep.call_args_list == [call(1), call(2), call(4)]

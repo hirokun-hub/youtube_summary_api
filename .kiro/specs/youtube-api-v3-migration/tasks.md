@@ -69,22 +69,26 @@
 
 ### RED: テスト追加
 
-- [ ] Y-22: `test_y22_classify_api_error` — 9パターン parametrize（design.md §4.7）
-- [ ] Y-23: `test_y23_retry_then_success` — 503→200、sleep(1) 1回（design.md §7.3）
-- [ ] Y-24: `test_y24_all_retries_exhausted` — 503×4回、sleep(1,2,4)（design.md §7.3）
-- [ ] Y-25: `test_y25_4xx_no_retry` — 403 quotaExceeded、requests.get 1回のみ（design.md §7.3）
-- [ ] Y-25b: `test_y25b_no_api_key_in_logs` — caplog でエラーログに `key=` や APIキー値が含まれないことを検証（US-4 受入基準 5: APIキー漏洩防止の回帰テスト）
+- [x] Y-22: `test_y22_classify_api_error` — 9パターン parametrize（design.md §4.7）
+- [x] Y-23: `test_y23_retry_then_success` — 503→200、sleep(1) 1回（design.md §7.3）
+- [x] Y-24: `test_y24_all_retries_exhausted` — 503×4回、sleep(1,2,4)（design.md §7.3）
+- [x] Y-25: `test_y25_4xx_no_retry` — 403 quotaExceeded、requests.get 1回のみ（design.md §7.3）
+- [x] Y-25b: `test_y25b_no_api_key_in_logs` — caplog でエラーログに `key=` や APIキー値が含まれないことを検証（US-4 受入基準 5: APIキー漏洩防止の回帰テスト）
+- [x] Y-25c: `test_y25c_network_error_retry_then_success` — ConnectionError→200、sleep(1) 1回（US-6 受入基準 1: ネットワークエラーのリトライ検証）
+- [x] Y-25d: `test_y25d_network_error_all_retries_exhausted` — ConnectionError×4回、sleep(1,2,4)（US-6 受入基準 1: ネットワークエラーの全リトライ失敗検証）
 
 ### GREEN: 実装
 
-- [ ] `ApiCallResult` NamedTuple を定義（design.md §3.1）
-- [ ] `_classify_api_error(status_code, error_body)` を実装（design.md §4.7）
-- [ ] `_call_youtube_api_with_retry(url, params)` を実装（design.md §4.4）
+- [x] `ApiCallResult` NamedTuple を定義（design.md §3.1）
+- [x] `_extract_api_error_reason(error_body)` を実装 — reason 抽出ロジックの共通化ヘルパー（コードレビューで DRY 改善として追加）
+- [x] `_classify_api_error(status_code, error_body)` を実装（design.md §4.7）— `_extract_api_error_reason` を使用、`accessNotConfigured` を明示的に分岐
+- [x] `_call_youtube_api_with_retry(url, params)` を実装（design.md §4.4）— ループ末尾に `AssertionError("unreachable")` で到達不能を明示
+- [x] `_YT_REASON_QUOTA_EXCEEDED`, `_YT_REASON_FORBIDDEN`, `_YT_REASON_ACCESS_NOT_CONFIGURED` — モジュール内 private 定数（コードレビューで定数の局所化として追加）
 
 ### 検証
 
-- [ ] Y-22〜Y-25b が全て PASS
-- [ ] 既存テスト（Y-1〜Y-17）+ Phase 2 テストが引き続き PASS
+- [x] Y-22〜Y-25d が全て PASS（15 passed）
+- [x] 既存テスト（Y-1〜Y-17）+ Phase 2 テストが引き続き PASS（合計 60 passed / 全テスト 73 passed）
 
 ---
 
