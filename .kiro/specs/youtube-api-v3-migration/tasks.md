@@ -235,10 +235,10 @@
 
 ## Phase 7: 最終検証
 
-- [ ] `pytest tests/ -v` — 全テスト PASS
-- [ ] `docker compose build api` — ビルド成功
-- [ ] `docker compose up -d` — コンテナ起動
-- [ ] 手動統合テスト: 実動画（`dQw4w9WgXcQ`）でメタデータ取得（design.md §10.3）
+- [x] `pytest tests/ -v` — 全テスト PASS（85 passed）
+- [x] `docker compose build api` — ビルド成功
+- [x] `docker compose up -d` — コンテナ起動
+- [x] 手動統合テスト: 実動画（`dQw4w9WgXcQ`）でメタデータ取得（design.md §10.3）
   - `title`, `channel_name`, `channel_id`, `description`, `webpage_url` が `str` であること
   - `upload_date` が `YYYY-MM-DD` 形式（str）であること
   - `duration` が秒数（int）であること
@@ -249,4 +249,4 @@
   - `categories` がカテゴリ名のリスト（例: `["Music"]`）であること
   - `channel_follower_count` が int または `null`（hiddenSubscriberCount 時、US-3 受入基準 3）
   - `thumbnail_url` が `https://i.ytimg.com/` で始まる URL であること
-- [ ] 手動統合テスト: 存在しない動画（`xxxxxxxxxxx`）で `VIDEO_NOT_FOUND` が返ること
+- [x] 手動統合テスト: 存在しない動画（`xxxxxxxxxxx`）で `VIDEO_NOT_FOUND` が返ること
