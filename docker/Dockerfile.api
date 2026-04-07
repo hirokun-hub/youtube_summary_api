@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY main.py .
 COPY app/ ./app/
 
-# ポート10000を公開（ドキュメント用、実際はnetwork_mode経由）
+# ポート10000を公開
 EXPOSE 10000
 
 # Uvicornでアプリケーションを起動（要件4.5）
