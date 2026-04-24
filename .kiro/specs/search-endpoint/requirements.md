@@ -370,6 +370,114 @@ tests/
   - quota_tracker 単体（リセット境界、PT 夏/冬時間切替、永続化と復元）
   - 既存 `/summary` テストの回帰（quota フィールド付与で壊れないこと）
 
+## 技術的制約
+
+本セクションは 2026-04-25 に実施した専門家3名（O / A / G）によるレビューで信頼度 97% 以上のコンセンサスが得られた技術的決定事項を列挙する。詳細な根拠・コード例・参考リンクは `docs/expert-reviews/2026-04-25-search-endpoint-design-review.md` を参照。
+
+### TC-1: HTTP クライアント
+
+- `requests.Session` + `urllib3.util.retry.Retry` を使用
+- リトライ対象: 429 / 500 / 502 / 503 / 504、`backoff_factor=1.0`、`backoff_jitter=0.3`
+- `Retry-After` ヘッダを尊重 (`respect_retry_after_header=True`)
+- **403 `quotaExceeded` はリトライしない**（`errors[0].reason` で判別し即時 `QUOTA_EXCEEDED` 判定）
+- `google-api-python-client` は採用しない（依存 50MB+、YouTube Data API 向け自動リトライ未実装のため）
+
+### TC-2: クォータ追跡の二層構造
+
+- **推定値**: プロセス内カウンタ + SQLite 永続化 →  `remaining_units_estimate` として返す
+- **権威値**: YouTube の 403 `quotaExceeded` を受けたら即 `QUOTA_EXCEEDED`（内部カウンタに関係なく）
+- プロセス起動時は `SELECT SUM(units_cost) FROM api_calls WHERE called_at_utc >= 今日のPT0時UTC` で `quota_state` を再計算・検証
+
+### TC-3: SQLite 並行耐性
+
+- 接続初期化で以下の PRAGMA を実行:
+  - `PRAGMA journal_mode=WAL`
+  - `PRAGMA synchronous=NORMAL`
+  - `PRAGMA busy_timeout=5000`
+  - `PRAGMA foreign_keys=ON`
+- 書き込みは `BEGIN IMMEDIATE` で書き込みロックを先取り（暗黙の `BEGIN` は使わない）
+- async エンドポイントから同期 `sqlite3` を呼ぶ時は `asyncio.to_thread()` 経由
+- PostgreSQL 移行閾値: 持続書き込み 10 QPS / 同時 writer 3+ / 同時接続 20+ / `SQLITE_BUSY` 週1回以上（いずれも本件の現状規模では該当しない）
+
+### TC-4: 非同期コンテキストのロック
+
+- `/search` のレート制限は **`asyncio.Lock`** を使用（`threading.Lock` を async def 内で使わない）
+- `collections.deque` + `asyncio.Lock` で自前スライディングウィンドウ実装
+- 将来 worker 2+ 化時は in-memory ロックが worker ごとに分裂するため、SQLite / Redis ベースへの移行を検討
+
+### TC-5: タイムゾーン処理
+
+- `zoneinfo.ZoneInfo("America/Los_Angeles")` を使用（IANA 正式名。`US/Pacific` は非推奨のエイリアス）
+- リセット時刻は `datetime.combine(now_pt.date() + timedelta(days=1), time.min, tzinfo=PT).astimezone(timezone.utc)` で算出
+- 内部処理は常に UTC で保持、PT への変換は表示時のみ
+- DST 境界テストを必ず含める: 2026-03-08 開始・2026-11-01 終了、PT 0:00 の前後±1分、`fold` 属性を伴う曖昧時刻
+
+### TC-6: search.list のパラメタ
+
+- **サーバー側で固定**: `type=video`, `maxResults=50`
+- **既定で指定しない**: `videoEmbeddable`（埋め込み可能動画のみに偏るため）
+- **リクエストで受け付ける**: `order`, `publishedAfter`, `publishedBefore`, `videoDuration`, `regionCode`, `relevanceLanguage`, `channelId`
+- `safeSearch` / `regionCode` の既定値は保留（YouTube 側デフォルトに委ねる）
+
+### TC-7: バッチ呼び出し
+
+- `videos.list` / `channels.list` は 50 IDs までカンマ区切り → **1 unit / コール**
+- `part=` に複数指定（`snippet,contentDetails,statistics`）してもコストは 1 unit（個別コール分割より割安）
+- 50件超の分割は Python 3.12 標準の `itertools.batched(ids, 50)` を使用
+
+### TC-8: `has_caption` フィールド
+
+- `videos.list(part=contentDetails)` の `contentDetails.caption`（文字列 `"true"` / `"false"`）を bool 化して `has_caption` で返す
+- 追加 API コスト **0 units**（既存の videos.list に含まれる）
+- AI が「字幕ある動画だけ `/summary` に回そう」と判断可能に
+- transcript 本文は絶対に含めない方針は変わらず（`/search` での50本一括字幕取得は IP BAN リスクのため）
+
+### TC-9: HTTP ステータスコード方針（**設計変更**）
+
+- **`/summary` は 200 固定を維持**（iPhone ショートカット互換）
+- **`/search` は標準 HTTP ステータスを返す**（既存 requirements.md の「常に 200」方針を上書き）
+
+| 状況 | HTTP | error_code |
+|---|---|---|
+| 成功 | 200 | `null` |
+| 認証エラー | 401 | `UNAUTHORIZED` |
+| リクエスト構造違反 | 422 | （Pydantic/FastAPI 標準） |
+| 自サーバ短期レート制限 | 429 | `CLIENT_RATE_LIMITED` |
+| YouTube 日次クォータ枯渇 | 429 または 403 | `QUOTA_EXCEEDED` |
+| YouTube 一時制限 | 503 または 429 | `RATE_LIMITED` |
+| 内部エラー | 500 | `INTERNAL_ERROR` |
+
+- 429 / 503 / 403 には **`Retry-After` ヘッダ** を付与
+- レスポンスボディは既存形式（`success`, `error_code`, `message`, `quota`）を維持（HTTP・ボディ両対応）
+- 変更理由: LLM Tool SDK（Anthropic / OpenAI / MCP）は HTTP ステータスで自動リトライを分岐するため、200 固定ではエラーを成功と誤認しハルシネーションする
+
+### TC-10: Pydantic v2 スキーマ
+
+- 型ヒントは **`X | None`** で統一（`Optional[X]` は新規コードで使わない）
+- `@computed_field` を使って `remaining_units_estimate` / `reset_in_seconds` を動的計算
+- 全レスポンスモデルに `model_config = ConfigDict(frozen=True, extra="forbid")` を適用
+- `RootModel` は使わない（`results` はフィールド）
+- `@model_validator(mode="after")` で `success` と `error_code` の相関制約を追加
+
+### TC-11: 観測性
+
+| 項目 | 判定 |
+|---|---|
+| Python 標準 `logging` | 必須 |
+| SQLite `api_calls` テーブル | 必須 |
+| JSON 構造化ログ | 推奨 |
+| `X-Request-ID` ヘッダ | あったら便利 |
+| Sentry / Prometheus / OpenTelemetry | 過剰（本件規模では不要） |
+
+### TC-12: テスト戦略
+
+- **第1層**: 全モックで既存97件 + 新規テスト（通常 CI で毎回実行）
+- **第2層**: 実 API レスポンス JSON を保存したスナップショットに対する Pydantic スキーマ検証（API 仕様変更の検知）
+- **第3層**: 実 API を週次または月次で 1 回だけ叩く統合テスト（環境変数 `RUN_LIVE_YOUTUBE_TESTS=1` で有効化、約 102 units = 日次 1%）
+- Pact 等の本格契約テストは採用しない
+
+---
+
 ## 非機能要件
 
 ### NFR-1: パフォーマンス
