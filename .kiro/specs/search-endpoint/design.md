@@ -745,8 +745,9 @@ async def _startup() -> None:
 #### `.gitignore`
 
 ```
-# 既存に追加
-data/usage/
+# 既存に追加（.gitkeep のみ追跡可能にするため 2 行構成）
+data/usage/*
+!data/usage/.gitkeep
 ```
 
 ---

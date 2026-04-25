@@ -8,18 +8,18 @@
 
 ## Phase 0: 準備
 
-- [ ] 0. 着手前チェック
-  - [ ] 0.1 ブランチ確認
+- [x] 0. 着手前チェック
+  - [x] 0.1 ブランチ確認
     - `git branch --show-current` が `feature/search-endpoint` であること
     - 既存テストが現状で全 PASS であること: `pytest tests/ -v`（97 件 PASS が基準値）
     - _要件: 受け入れ基準 #17_
-  - [ ] 0.2 `.gitignore` に `data/usage/` を追加する
-    - 末尾に `data/usage/` の 1 行を追加（`.env.local` 周辺の機密値ブロック付近にコメントとともに配置）
+  - [x] 0.2 `.gitignore` に `data/usage/` を追加する
+    - `.env.local` 直後の機密値ブロック末尾に **2 行** 追加する: `data/usage/*` と `!data/usage/.gitkeep`（後者で `.gitkeep` だけ追跡可能にする。タスク 0.3 で `.gitkeep` を commit する前提を満たすために 1 行構成では不可）
     - _要件: 受け入れ基準 #16_
-  - [ ] 0.3 `data/usage/` ディレクトリを作成する
+  - [x] 0.3 `data/usage/` ディレクトリを作成する
     - `.gitkeep` のみ commit（usage.db は `.gitignore` で除外）
     - _要件: 設計書 §5_
-  - [ ] 0.4 依存追加が不要であることを再確認する
+  - [x] 0.4 依存追加が不要であることを再確認する
     - `requirements.txt` に追加なし（`requests` / `sqlite3` / `zoneinfo` / `asyncio` / `itertools.batched` はすべて既存または Python 3.12 標準）
     - `requirements-dev.txt` も変更なし
     - _要件: 要件定義書「新規依存」_

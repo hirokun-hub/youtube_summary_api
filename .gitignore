@@ -23,5 +23,9 @@ Thumbs.db
 .env
 .env.local
 
+# Local usage data (SQLite quota DB) — 運用ログのため Git 管理外（.gitkeep は除外しない）
+data/usage/*
+!data/usage/.gitkeep
+
 # Claude Code (local settings)
 .claude/settings.local.json
