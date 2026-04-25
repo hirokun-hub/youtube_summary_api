@@ -134,8 +134,8 @@
 
 ## Phase 3: youtube_search サービス層（RED → GREEN）
 
-- [ ] 8. サービス層テストを書く（RED）
-  - [ ] 8.1 `tests/test_search_service.py` にテスト SS-1〜SS-12 を実装する（design.md §3.5 の契約「常に SearchResponse を返す（例外を投げない）」に整合）
+- [x] 8. サービス層テストを書く（RED）
+  - [x] 8.1 `tests/test_search_service.py` にテスト SS-1〜SS-12 を実装する（design.md §3.5 の契約「常に SearchResponse を返す（例外を投げない）」に整合）
     - SS-1: 正常系 `search_videos(req)` が `search.list` → `videos.list` → `channels.list` を順に 1 回ずつ呼び、`SearchResponse(success=True, error_code=None, results=[...])` を返す
     - SS-2: 重複動画 ID の排除（`videos.list` の id パラメタが unique）
     - SS-3: 重複チャンネル ID の排除（`channels.list` の id パラメタが unique）
@@ -151,29 +151,43 @@
     - **モック対象**: `app.services.youtube_search._session` の `get` メソッド（`requests.Session` インスタンスをモジュールレベルで保持する実装に合わせる。design.md §3.5 / TC-1 と整合）。`MagicMock` で `status_code` / `json()` / `headers` を返す
     - **削除（Phase 2 へ繰り延べ）**: 50 件超のチャンネル ID バッチ分割テスト — `/search` の `maxResults=50` 固定により unique channel IDs ≤ 50 で通常フローでは到達しない。`itertools.batched` の境界は将来 max_results 引き上げ時の保険であり MVP 受け入れに直接寄与しないため
     - **削除**: 上流 401 認証失敗テスト — `YOUTUBE_API_KEY` の不正設定はデプロイ時に発覚すべき問題で、ランタイムテスト対象から外す（MVP 受け入れ基準には対応せず）
+    - **追加（Phase 3 専門家レビュー対応）**: 防御的型チェックテストを 9 件追加し、契約「常に SearchResponse を返す（例外を投げない）」と要件「予期せぬ例外は INTERNAL_ERROR」を厳密に固定する:
+      ① 200 OK + JSON decode 失敗 → ERROR_INTERNAL（quota 加算なし）
+      ② 200 OK + 非 dict body（list 等） → ERROR_INTERNAL
+      ③ search.list の `items` が非 list → ERROR_INTERNAL
+      ④ search.list `items` 内に非 dict 要素 → ERROR_INTERNAL
+      ⑤ `pageInfo` が非 dict → 緩く `total_results_estimate=None` で成功扱い（派生メタは致命でない）
+      ⑥ videos.list 200 OK + 非 dict body → ERROR_INTERNAL（search.list 段階の add_units(100) のみ積まれる）
+      ⑦ channels.list 200 OK + JSON decode 失敗 → ERROR_INTERNAL（add_units(100, 1) まで積まれる）
+      ⑧ videos.list の `items` が非 list → ERROR_INTERNAL
+      ⑨ search.list item の `id` が非 dict → ERROR_INTERNAL
     - 実行 → **全件失敗（RED）** を確認
-    - _要件: 受け入れ基準 #2, #5, #7, #10、設計書 §3.5, §7, §9.5, TC-1_
+    - _要件: 受け入れ基準 #2, #5, #7, #10, #11、設計書 §3.5, §7, §9.5, TC-1_
 
-- [ ] 9. サービス層を実装する（GREEN）
-  - [ ] 9.1 `app/services/youtube_search.py` を新規作成する
+- [x] 9. サービス層を実装する（GREEN）
+  - [x] 9.1 `app/services/youtube_search.py` を新規作成する
     - **HTTP クライアント**: モジュールレベルで `_session = requests.Session()` を構築し、`HTTPAdapter(max_retries=Retry(total=N, status_forcelist=[429, 500, 502, 503, 504], backoff_factor=1.0, backoff_jitter=0.3, respect_retry_after_header=True, allowed_methods=["GET"], **raise_on_status=False**))` を `mount("https://", ...)`。**`raise_on_status=False` が必須**（urllib3 のデフォルトは True で、リトライ枯渇後は `MaxRetryError` 例外になり、SS-8/SS-9 の「`SearchResponse` を返す」前提が崩れるため）。design.md §3.5 / TC-1 と整合
-    - `_call_youtube_search_api(url: str, params: dict) -> tuple[int, dict | None, str | None, bool]`: `_session.get(url, params=params, timeout=...)` で取得し、生 HTTP レスポンスを返す。**403 quotaExceeded はリトライしない**（即時 `QUOTA_EXCEEDED` 判定）
+    - **`_call_api(url: str, params: dict) -> tuple[int, dict | None, dict, str | None]`**（実装結果。当初案の `_call_youtube_search_api(url, params) -> tuple[int, dict|None, str|None, bool]` から変更）: `_session.get(url, params=params, timeout=...)` で取得し、`(status_code, body_or_none, headers_dict, error_code_or_none)` を返す。**`is_retryable_failure` フラグは廃止**（リトライは urllib3 が完了し、最終 HTTP レスポンスが直接戻るため不要）。**`headers` を戻り値に含める**（`Retry-After` を SearchResponse.retry_after に格納するため）。**403 quotaExceeded はリトライしない**（即時 `QUOTA_EXCEEDED` 判定）。**200 OK でも body が dict でない場合は `ERROR_INTERNAL` に倒す**（Phase 3 専門家レビュー対応、契約「常に SearchResponse を返す」を厳密化）
     - `_classify_search_api_error(status_code: int, error_body: dict | None) -> str`: 403 quotaExceeded → `ERROR_QUOTA_EXCEEDED`、429/5xx → `ERROR_RATE_LIMITED`、その他 4xx → `ERROR_INTERNAL`
     - `_compute_ratio(numerator, denominator) -> float | None`: 分母 0 / None で None
     - `_parse_caption(value: str | None) -> bool`: `"true"` → True、それ以外 → False
-    - **契約**: `search_videos(req: SearchRequest) -> SearchResponse`（**常に `SearchResponse` を返す。例外は投げない**。design.md §3.5 L491 と整合）
+    - **`_safe_items(body: dict | None) -> list[dict] | None`**（Phase 3 専門家レビュー対応で追加）: `body.items` を `list[dict]` として安全に取り出す。body が非 dict / items が非 list / 要素に非 dict を含む → `None`（呼び出し側で `ERROR_INTERNAL` に倒すシグナル）。items 不在 / `None` → 空 list
+    - **契約**: `search_videos(req: SearchRequest) -> SearchResponse`（**常に `SearchResponse` を返す。例外は投げない**。design.md §3.5 L491 と整合）。**実装は `_do_search` 本体 + `try / except Exception` の最終捕捉ラッパに分割**（Phase 3 専門家レビュー対応で追加。`_build_search_result` 内の想定外例外も `_failure_response(ERROR_INTERNAL, req.q)` に倒す）
       1. `search.list` 呼び出し（成功時 `add_units(100)`、失敗時はその時点で `SearchResponse(success=False, error_code=...)` を return）
       2. videoId 重複排除 → `videos.list(id=...)` 呼び出し（成功時 `add_units(1)`、失敗時 return）
       3. channelId 重複排除 → `channels.list` 呼び出し（成功時 `add_units(1)`、失敗時 return）。Unique IDs ≤ 50 のため通常 1 回で完結。`itertools.batched(ids, 50)` は 50 件超の保険として残す
       4. 結合 + 派生値計算 + `has_caption` 設定 → `SearchResponse(success=True, error_code=None, results=[...])`
       5. 403 quotaExceeded 受信時は `quota_tracker.mark_exhausted("youtube_403")` を呼んでから return
       6. リトライ枯渇後の 429 / 5xx は `Retry-After` ヘッダ値を取得して `SearchResponse.retry_after` に格納
+      7. **各ステージ後の防御**: `_safe_items()` で 200 OK 応答の `items` 形状を検証、不正なら `ERROR_INTERNAL` を返す（Phase 3 専門家レビュー対応）
     - **`record_api_call` は呼ばない**（router の finally 相当で 1 回呼ぶ。指摘 1/3 への対応）
-    - 既存の `_parse_iso8601_duration` / `_format_duration_string` / `_select_best_thumbnail` / `_to_int_or_none` / `YOUTUBE_CATEGORY_MAP` を **再利用**（`app/services/youtube.py` および `app/core/constants.py` から import）
+    - 既存の `_parse_iso8601_duration` / `_format_duration_string` / `_select_best_thumbnail` / `_to_int_or_none` / `_extract_api_error_reason` / `YOUTUBE_CATEGORY_MAP` / `YOUTUBE_WATCH_URL_TEMPLATE` を **再利用**（`app/services/youtube.py` および `app/core/constants.py` から import）
     - 既存の `_call_youtube_api_with_retry` / `_classify_api_error` は **再利用しない**（`/summary` の挙動を保つため別実装）
+    - **設計書差分**: design.md §3.5 で個別関数として描かれていた `_call_search_list` / `_call_videos_list` / `_call_channels_list` は実装で **`_call_api` に統合**（呼び出し側の `_do_search` 内でインライン呼び出し）。共通化により URL 別の薄いラッパが不要となり、コードが簡潔化
     - _要件: 設計書 §2.3, §3.5, FR-10, TC-1, TC-7, TC-8_
-  - [ ] 9.2 テスト実行 → **全件成功（GREEN）** を確認
+  - [x] 9.2 テスト実行 → **全件成功（GREEN）** を確認
     - `pytest tests/test_search_service.py -v`
+    - **実績**: **31 件 PASS**（SS-1〜SS-12 系列の parametrize 展開で 22 件 + Phase 3 専門家レビュー対応の防御テスト 9 件）。全体 **193 件 PASS**、既存挙動の回帰なし
 
 ## Phase 4: router + エンドポイント統合（RED → GREEN）
 
@@ -401,9 +415,9 @@
 |---|---|---|
 | 1 | `pytest tests/test_search_schemas.py tests/test_schemas.py -v` | SR-1〜SR-7 系 (50, parametrize と専門家レビュー追加分を含む) + S-1〜S-6 (6) PASS |
 | 2 | `pytest tests/test_async_rate_limiter.py tests/test_quota_tracker.py -v` | AR-1〜AR-5 (5) + SQ-1〜SQ-9 + 追加 mark_exhausted カバレッジ (10) = **15 PASS**（実績） |
-| 3 | `pytest tests/test_search_service.py -v` | SS-1〜SS-12 (12) PASS |
+| 3 | `pytest tests/test_search_service.py -v` | **31 件 PASS**（実績）: SS-1〜SS-12 系列 22 件（parametrize 展開含む） + Phase 3 専門家レビュー対応の防御テスト 9 件 |
 | 4 | `pytest tests/test_search_endpoint.py -v` | ST-1〜ST-9 (9) PASS |
-| 5 | `pytest tests/ -v` | **既存 97 + 新規 47 = 144 件 PASS**（旧 SS-4「50件超バッチ」を Phase 2 へ繰り延べ、旧 SS-10「上流 401」を削除し契約を「常に SearchResponse を返す」に統一したため、SS の総数は 13 → 12） |
+| 5 | `pytest tests/ -v` | **Phase 3 完了時点の実績: 193 件 PASS**（既存 97 + Phase 1 SR 50 + Phase 2 AR/SQ 15 + Phase 3 SS+防御 31）。Phase 4 完了で ST 9 件追加、Phase 5 完了で SU 5 件追加の見込み |
 | 6 | `docker compose -f compose.staging.yml up -d` + curl | 5 種 HTTP（200/401/422/429）が staging で確認できる |
 | 7 | `docker compose up -d` + iPhone ショートカット | 本番 `/summary` 後方互換 + 新規 `/search` 動作 |
 

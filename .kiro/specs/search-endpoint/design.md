@@ -674,6 +674,18 @@ def _classify_search_api_error(status_code: int, error_body: dict | None) -> str
 - 既存 `_call_youtube_api_with_retry` には触らない（`/summary` の挙動を維持）
 - 共通化（既存ヘルパのジェネリック分離）は Phase 2 以降で重複が看過できなくなった時点で再検討する（YAGNI）
 
+#### Phase 3 実装結果との差分（実装後追記）
+
+設計時の擬似コードと最終実装に以下の差分がある（いずれも tasks.md Phase 3 / Phase 3 専門家レビュー対応で適用）:
+
+| 設計時 | 実装後 | 理由 |
+|---|---|---|
+| `_call_youtube_search_api(url, params) -> tuple[int, dict\|None, str\|None, bool]`（4-tuple、末尾 `is_retryable_failure: bool`） | **`_call_api(url, params) -> tuple[int, dict\|None, dict, str\|None]`**（4-tuple、3 番目に `headers_dict`） | `urllib3.Retry(raise_on_status=False)` 採用によりリトライ枯渇後も最終 HTTP レスポンスが直接戻るため `is_retryable_failure` フラグが不要に。代わりに `Retry-After` ヘッダ取得用に `headers` を露出 |
+| `_call_search_list` / `_call_videos_list` / `_call_channels_list` の 3 関数 | **`_call_api` に統合**、`_do_search` 内でインライン呼び出し | URL 別の薄いラッパが不要。共通化で簡潔化 |
+| `_record_api_call` を `youtube_search.py` 内に置く | **`quota_tracker.record_api_call` に集約**（Phase 2 で実装済み）、本モジュールからは呼ばない | `/search` と `/summary` の両方から呼ぶため SQLite アクセスを集約。本モジュールでは router の finally で 1 回呼ぶ前提 |
+| （未明記） | **`_safe_items(body)` 防御ヘルパ追加** + **`search_videos` を `_do_search` + try/except 最終捕捉ラッパに分割** | Phase 3 専門家レビュー対応。200 OK でも JSON decode 失敗 / 非 dict body / `items` 形状不正で `success=True` 誤判定や AttributeError 漏れが起き得たため、契約「常に SearchResponse を返す」を厳密化 |
+| `_calc_ratio` / `_parse_caption_flag` | **`_compute_ratio` / `_parse_caption`** | 命名のみの差（機能同等） |
+
 ### 3.6 `app/routers/search.py`（新規）
 
 ```python
