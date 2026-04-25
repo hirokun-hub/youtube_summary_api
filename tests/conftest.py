@@ -18,6 +18,18 @@ def mock_youtube_api_key(monkeypatch):
     """全テストで YOUTUBE_API_KEY を設定する。"""
     monkeypatch.setenv("YOUTUBE_API_KEY", "test-youtube-api-key")
 
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiter():
+    """各テスト前後にレートリミッタの内部状態をリセットする。
+
+    プロセス内グローバル状態のため、テスト間の干渉を防ぐ。
+    """
+    from app.core import rate_limiter
+    rate_limiter.reset()
+    yield
+    rate_limiter.reset()
+
 @pytest.fixture
 def client():
     """認証をバイパスする通常テスト用クライアント"""

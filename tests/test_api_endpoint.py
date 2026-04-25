@@ -1,8 +1,10 @@
-"""テストケース E-1〜E-7: APIエンドポイントの統合テスト"""
+"""テストケース E-1〜E-9: APIエンドポイントの統合テスト"""
 
 from unittest.mock import MagicMock, patch
 
 from app.core.constants import (
+    CLIENT_RATE_LIMIT_INTERVAL_SECONDS,
+    ERROR_CLIENT_RATE_LIMITED,
     ERROR_INVALID_URL,
     ERROR_TRANSCRIPT_NOT_FOUND,
 )
@@ -203,3 +205,59 @@ def test_e7_transcript_metadata_in_response(mock_ytt_class, mock_get, client):
 
     assert data["transcript_language"] == "en"
     assert data["is_generated"] is True
+
+
+# --- E-8: クライアント側レート制限 — 連続リクエストは2回目以降拒否 ---
+
+@patch("app.services.youtube.requests.get")
+@patch("app.services.youtube.YouTubeTranscriptApi")
+def test_e8_client_rate_limited_on_second_request(mock_ytt_class, mock_get, client):
+    """1回目は成功、直後の2回目は CLIENT_RATE_LIMITED で拒否される。"""
+    # 1回目用のモック (成功)
+    _make_v3_api_mock(mock_get, V3_VIDEO_RESPONSE, V3_CHANNEL_RESPONSE)
+    _make_transcript_mock(mock_ytt_class)
+
+    resp1 = client.post(ENDPOINT, json={"url": VALID_URL})
+    assert resp1.status_code == 200
+    assert resp1.json()["success"] is True
+
+    # 2回目: 60秒以内なので拒否されるはず
+    resp2 = client.post(ENDPOINT, json={"url": VALID_URL})
+
+    assert resp2.status_code == 200  # 既存パターン (常に200)
+    data = resp2.json()
+    assert data["success"] is False
+    assert data["status"] == "error"
+    assert data["error_code"] == ERROR_CLIENT_RATE_LIMITED
+    assert data["retry_after"] is not None
+    assert 1 <= data["retry_after"] <= CLIENT_RATE_LIMIT_INTERVAL_SECONDS
+    # メッセージに秒数が含まれていること
+    assert str(data["retry_after"]) in data["message"]
+
+
+# --- E-9: レート制限拒否時のレスポンスは SummaryResponse 形状を維持 ---
+
+@patch("app.services.youtube.requests.get")
+@patch("app.services.youtube.YouTubeTranscriptApi")
+def test_e9_rate_limited_response_preserves_schema(mock_ytt_class, mock_get, client):
+    """拒否レスポンスでも SummaryResponse のフィールドが揃い、メタデータは null。"""
+    _make_v3_api_mock(mock_get, V3_VIDEO_RESPONSE, V3_CHANNEL_RESPONSE)
+    _make_transcript_mock(mock_ytt_class)
+
+    # 1回目消費
+    client.post(ENDPOINT, json={"url": VALID_URL})
+
+    # 2回目: 拒否
+    resp = client.post(ENDPOINT, json={"url": VALID_URL})
+    data = resp.json()
+
+    # 拒否時は YouTube から取得した値は何もないので null になっているはず
+    assert data["title"] is None
+    assert data["channel_name"] is None
+    assert data["transcript"] is None
+    assert data["upload_date"] is None
+    # 必須フィールドは存在
+    assert "success" in data
+    assert "message" in data
+    assert "error_code" in data
+    assert "retry_after" in data
