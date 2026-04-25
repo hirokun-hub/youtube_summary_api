@@ -72,8 +72,8 @@
 
 ### 2-A: async_rate_limiter（RED → GREEN）
 
-- [ ] 4. async レート制限テストを書く（RED）
-  - [ ] 4.1 `tests/test_async_rate_limiter.py` にテスト AR-1〜AR-5 を実装する
+- [x] 4. async レート制限テストを書く（RED）
+  - [x] 4.1 `tests/test_async_rate_limiter.py` にテスト AR-1〜AR-5 を実装する
     - AR-1: 10 回までは `check_request()` が `(True, None)` を返す
     - AR-2: 11 回目で `(False, blocked_payload)`、`retry_after` が「ウィンドウ先頭が 60 秒経過するまでの秒数」と一致
     - AR-3: 60 秒経過後にウィンドウから古い記録が排除され、再度許可される（`time.monotonic` をパッチ）
@@ -82,21 +82,22 @@
     - 実行 → **全件失敗（RED）** を確認
     - _要件: 受け入れ基準 #9, #12、設計書 §3.3, §9.4_
 
-- [ ] 5. async レート制限を実装する（GREEN）
-  - [ ] 5.1 `app/core/async_rate_limiter.py` を新規作成する
-    - `_state = {"deque": collections.deque(), "lock": asyncio.Lock()}` （モジュールレベル）
-    - `async def check_request() -> tuple[bool, dict | None]`
+- [x] 5. async レート制限を実装する（GREEN）
+  - [x] 5.1 `app/core/async_rate_limiter.py` を新規作成する
+    - `_state = {"deque": collections.deque(), "lock": None}`（モジュールレベル）。`lock` は **lazy 初期化**（最初の `check_request` で `asyncio.Lock()` を生成）。Python 3.10+ で `asyncio.Lock()` は最初の `await` 時に現在の event loop に結びつくため、テスト環境で `asyncio.run()` を複数回呼ぶケースに対する安全性確保
+    - `async def check_request(now=None) -> tuple[bool, dict | None]`（`now` はテスト用に外部から `time.monotonic()` 値を注入できる任意引数）
     - `collections.deque` で直近 60 秒の `time.monotonic()` 値を保持、ウィンドウ外は popleft
-    - 上限超過時は `error_code=ERROR_CLIENT_RATE_LIMITED` / `retry_after` / `message` を含む dict を返す
+    - 上限超過時は `error_code=ERROR_CLIENT_RATE_LIMITED` / `retry_after` / `message` を含む dict を返す（`retry_after` は `max(1, ceil(window - elapsed))` で最低 1 秒）
+    - `reset() -> None`: テスト用の deque + lock リセット
     - 既存の `app/core/rate_limiter.py`（`/summary` 用 `threading.Lock`）には触らない
     - _要件: 受け入れ基準 #9, #12、設計書 §3.3, TC-4_
-  - [ ] 5.2 テスト実行 → **全件成功（GREEN）** を確認
+  - [x] 5.2 テスト実行 → **全件成功（GREEN）** を確認
     - `pytest tests/test_async_rate_limiter.py -v`
 
 ### 2-B: quota_tracker（RED → GREEN）
 
-- [ ] 6. quota_tracker テストを書く（RED）
-  - [ ] 6.1 `tests/test_quota_tracker.py` にテスト SQ-1〜SQ-9 を実装する
+- [x] 6. quota_tracker テストを書く（RED）
+  - [x] 6.1 `tests/test_quota_tracker.py` にテスト SQ-1〜SQ-9 を実装する
     - SQ-1: 起動時 `init_db()` で `api_calls` / `quota_state` テーブルが作成され、PRAGMA（WAL/synchronous=NORMAL/busy_timeout=5000/foreign_keys=ON）が適用される
     - SQ-2: `add_units(100)` で in-memory `consumed_units_today` と SQLite `quota_state` が同時に +100 される（api_calls には書かない）
     - SQ-3: `record_api_call(endpoint, ...)` で `api_calls` に 1 行 INSERT され、`quota_state` には影響しない（`endpoint="search"` / `endpoint="summary"` の両方で同一関数が使えること）
@@ -109,26 +110,27 @@
     - 実行 → **全件失敗（RED）** を確認
     - _要件: 受け入れ基準 #10, #11, #13, #14, #15、設計書 §3.2, §5_
 
-- [ ] 7. quota_tracker を実装する（GREEN）
-  - [ ] 7.1 `app/core/quota_tracker.py` を新規作成する
-    - モジュール定数: `_state = {"consumed_units_today": 0, "current_quota_date_pt": None}`, `_lock = threading.RLock()`（in-memory ガード）
+- [x] 7. quota_tracker を実装する（GREEN）
+  - [x] 7.1 `app/core/quota_tracker.py` を新規作成する
+    - モジュール定数: `_state = {"consumed_units_today": 0, "quota_date_pt": None, "exhausted_until": None, "db_path": None}`, `_lock = threading.RLock()`（in-memory ガード）
     - `_request_cost: ContextVar[int] = ContextVar("request_cost", default=0)`
-    - `init_db() -> None`: テーブル作成 + PRAGMA 適用
-    - `restore_from_db() -> None`: 起動時に `SELECT SUM(units_cost) FROM api_calls WHERE called_at_utc >= 今日のPT0時UTC` で再計算
-    - `add_units(cost: int) -> None`: in-memory + `quota_state` UPDATE + `_request_cost` 加算（3 箇所同時更新）
-    - **`record_api_call(endpoint, input_summary, units_cost, http_status, http_success, error_code, transcript_success, transcript_language, result_count) -> None`**: `api_calls` に 1 行 INSERT。**`quota_tracker.py` に置く**（design.md §3.5 では `youtube_search.py` 内に置く案だったが、`/search` と `/summary` の両方から呼ぶため SQLite アクセスを集約する責務として `quota_tracker.py` に集約。設計書 §3.5 の `_record_api_call` の役割をここに移動する）
-    - `get_snapshot(now_utc: datetime) -> Quota`: ContextVar の `last_call_cost` も含めて `Quota` を組み立てる
-    - `is_exhausted() -> bool`
+    - **`init(db_path, now_utc=None) -> None`**: テーブル作成 + PRAGMA 適用 + 起動時 SUM 復元を **1 関数に統合**（実装結果。当初案では `init_db()` と `restore_from_db()` を分離していたが、design.md §3.2 と整合させる形で 1 つの `init()` に集約。`now_utc` 引数はテスト用）
+    - `add_units(cost, now_utc=None) -> None`: in-memory + `quota_state` UPDATE + `_request_cost` 加算（3 箇所同時更新）
+    - **`record_api_call(endpoint, input_summary, units_cost, http_status, http_success, error_code, transcript_success, transcript_language, result_count, now_utc=None) -> None`**: `api_calls` に 1 行 INSERT。**`quota_tracker.py` に置く**（design.md §3.5 では `youtube_search.py` 内に置く案だったが、`/search` と `/summary` の両方から呼ぶため SQLite アクセスを集約する責務として `quota_tracker.py` に集約。設計書 §3.5 の `_record_api_call` の役割をここに移動する）
+    - `get_snapshot(now_utc=None) -> Quota`: ContextVar の `last_call_cost` も含めて `Quota` を組み立てる（NamedTuple ではなく `app.models.schemas.Quota` を直接返す）
+    - `is_exhausted(now_utc=None) -> bool`
+    - `mark_exhausted(reason, now_utc=None) -> None`: 403 受信時に呼ぶ。次の PT 0:00 まで in-memory で枯渇扱い（**MVP では永続化しない** — FR-8 の「権威」レイヤは「内部カウンタに関係なく即 QUOTA_EXCEEDED に倒す」までで、再起動越えの永続化は明示要件外。実害は再起動直後の 1 リクエストで再度 403 を受け同状態に戻るだけ）
     - `reset_request_cost() -> None`: `_request_cost.set(0)`
     - `get_request_cost() -> int`: `_request_cost.get()`
-    - `next_pt_midnight_utc(now_utc: datetime) -> datetime`: `zoneinfo` で計算
+    - `_next_pt_midnight_utc(now_utc) -> datetime`: `zoneinfo` で計算（モジュール内 private）
     - すべての SQLite 書き込みは `BEGIN IMMEDIATE` で開始、async コンテキストからは `asyncio.to_thread()` で呼ぶ
     - _要件: 受け入れ基準 #10, #11, #13, #14, #15、設計書 §3.2, §5, §8, TC-2/3/5_
-  - [ ] 7.2 `main.py` の startup で `init_db()` + `restore_from_db()` を呼び出す
-    - FastAPI の `@app.on_event("startup")` または `lifespan` を使用
+  - [x] 7.2 `main.py` の lifespan で `init(USAGE_DB_PATH)` を 1 回呼び出す
+    - FastAPI の `lifespan`（`@asynccontextmanager` ベース）を採用（`@app.on_event("startup")` は非推奨警告のため避けた）
     - _要件: 受け入れ基準 #14、設計書 §5.5_
-  - [ ] 7.3 テスト実行 → **全件成功（GREEN）** を確認
+  - [x] 7.3 テスト実行 → **全件成功（GREEN）** を確認
     - `pytest tests/test_async_rate_limiter.py tests/test_quota_tracker.py -v`
+    - **実績**: AR 5 件 + SQ 10 件（タスク 6.1 の SQ-1〜9 に加え、403 強制 exhausted の追加カバレッジとして `test_sq7_mark_exhausted_forces_true_until_pt_midnight` を追加。design.md §9.3 SQ-6 と同等）= 15 件 PASS
 
 ## Phase 3: youtube_search サービス層（RED → GREEN）
 
@@ -194,7 +196,7 @@
     - ST-2: `X-API-KEY` ヘッダなし → HTTP 401 + `error_code=UNAUTHORIZED`、`quota` フィールド **なし**。**`api_calls` には行追加なし**（認証通過前のため記録しない）
     - ST-3: `q` 未指定 → HTTP 422 + `{"detail": [...]}` 形式、`quota` **なし**、`success`/`error_code` **なし**。**`api_calls` には行追加なし**（バリデーション失敗のため記録しない）
     - ST-4: `order` 列挙外 → HTTP 422、`api_calls` 行追加なし
-    - ST-5: 11 回目のリクエスト（`async_rate_limiter` の上限超過）→ HTTP 429 + `Retry-After` ヘッダ + `error_code=CLIENT_RATE_LIMITED` + `retry_after` フィールド + `quota` **あり** + メッセージ本文に `"1分あたり最大10回"` と `retry_after` 秒数を含む。**`api_calls` に 1 行 INSERT、`endpoint="search"` / `units_cost=0` / `http_status=429` / `http_success=False` / `error_code="CLIENT_RATE_LIMITED"`**
+    - ST-5: 11 回目のリクエスト（`async_rate_limiter` の上限超過）→ HTTP 429 + `Retry-After` ヘッダ + `error_code=CLIENT_RATE_LIMITED` + `retry_after` フィールド + `quota` **あり** + メッセージ本文に `"max 10 requests per 60 seconds"` と `retry_after` 秒数を含む。**`api_calls` に 1 行 INSERT、`endpoint="search"` / `units_cost=0` / `http_status=429` / `http_success=False` / `error_code="CLIENT_RATE_LIMITED"`**
     - ST-6: `quota_tracker.is_exhausted()` を mock で True → HTTP 429 + `Retry-After` + `error_code=QUOTA_EXCEEDED` + `quota.remaining_units_estimate == 0`。**`api_calls` に 1 行、`units_cost=0` / `http_status=429` / `error_code="QUOTA_EXCEEDED"`**
     - ST-7: YouTube が 403 quotaExceeded を返す（service 内で `mark_exhausted` が呼ばれる）→ HTTP 429 + `error_code=QUOTA_EXCEEDED`。**`api_calls` に 1 行、`units_cost=0`（search.list 段階で 403 を受けた場合）または部分消費分**
     - ST-8: YouTube が 429 を返す → HTTP 503 + `Retry-After` + `error_code=RATE_LIMITED`。**`api_calls` に 1 行、`http_status=503` / `error_code="RATE_LIMITED"`**
@@ -398,7 +400,7 @@
 | Phase | 検証コマンド | 期待結果 |
 |---|---|---|
 | 1 | `pytest tests/test_search_schemas.py tests/test_schemas.py -v` | SR-1〜SR-7 系 (50, parametrize と専門家レビュー追加分を含む) + S-1〜S-6 (6) PASS |
-| 2 | `pytest tests/test_async_rate_limiter.py tests/test_quota_tracker.py -v` | AR-1〜AR-5 (5) + SQ-1〜SQ-9 (9) PASS |
+| 2 | `pytest tests/test_async_rate_limiter.py tests/test_quota_tracker.py -v` | AR-1〜AR-5 (5) + SQ-1〜SQ-9 + 追加 mark_exhausted カバレッジ (10) = **15 PASS**（実績） |
 | 3 | `pytest tests/test_search_service.py -v` | SS-1〜SS-12 (12) PASS |
 | 4 | `pytest tests/test_search_endpoint.py -v` | ST-1〜ST-9 (9) PASS |
 | 5 | `pytest tests/ -v` | **既存 97 + 新規 47 = 144 件 PASS**（旧 SS-4「50件超バッチ」を Phase 2 へ繰り延べ、旧 SS-10「上流 401」を削除し契約を「常に SearchResponse を返す」に統一したため、SS の総数は 13 → 12） |

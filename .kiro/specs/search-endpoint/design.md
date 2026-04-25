@@ -139,15 +139,15 @@ ERROR_UNAUTHORIZED = "UNAUTHORIZED"
 SEARCH_RATE_LIMIT_WINDOW_SECONDS = 60
 SEARCH_RATE_LIMIT_MAX_REQUESTS = 10
 
-# --- メッセージ（追加） ---
-MSG_UNAUTHORIZED = "X-API-KEY ヘッダが不正または未設定です。"
+# --- メッセージ（追加・本文は API レスポンス互換のため英語固定） ---
+MSG_UNAUTHORIZED = "Invalid or missing X-API-KEY header."
 MSG_QUOTA_EXCEEDED_TEMPLATE = (
-    "YouTube Data API の日次クォータ({daily_limit} units)を使い切りました。"
-    "あと {reset_in_seconds} 秒(JST {reset_jst} に)リセットされます。"
+    "YouTube Data API daily quota ({daily_limit} units) exhausted. "
+    "Resets in {reset_in_seconds} seconds (at {reset_jst} JST)."
 )
 MSG_SEARCH_CLIENT_RATE_LIMITED_TEMPLATE = (
-    "検索レート制限: 直近{window}秒で{max_req}回を超えました。"
-    "ルール: {window}秒あたり最大{max_req}回。{retry_after}秒後に再試行してください。"
+    "Search rate limit exceeded: more than {max_req} requests in the last {window} seconds. "
+    "Rule: max {max_req} requests per {window} seconds. Retry after {retry_after} seconds."
 )
 
 # --- YouTube Data API v3（追加・変更） ---
@@ -180,28 +180,24 @@ USAGE_DB_PATH = "data/usage/usage.db"
 
 import sqlite3
 import threading
-from collections import namedtuple
 from contextvars import ContextVar
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from app.models.schemas import Quota  # 公開シグネチャに直接利用
+
 PT = ZoneInfo("America/Los_Angeles")
+JST = timezone(timedelta(hours=9))
 
-QuotaSnapshot = namedtuple(
-    "QuotaSnapshot",
-    ["consumed_units_today", "remaining_units_estimate", "daily_limit",
-     "reset_at_utc", "reset_at_jst", "reset_in_seconds", "is_exhausted"],
-)
-
-# プロセス内状態（threading.Lock で保護）
-_state = {
+# プロセス内状態（threading.RLock で保護）
+_state: dict = {
     "consumed_units_today": 0,
-    "quota_date_pt": None,           # str: "2026-04-25"
-    "exhausted_until": None,         # datetime | None: 403 受信時に強制 exhausted
+    "quota_date_pt": None,           # str | None: "2026-04-25"
+    "exhausted_until": None,         # datetime | None: 403 受信時の強制 exhausted 期限
+    "db_path": None,                 # Path | None: init で設定
 }
-_lock = threading.Lock()
-_db_path: Path | None = None  # init() で設定
+_lock = threading.RLock()
 
 # リクエストローカルな当該リクエスト分の cost 累計。
 # FastAPI の async タスクごとに ContextVar が独立するため、並行リクエストで干渉しない。
@@ -209,50 +205,70 @@ _db_path: Path | None = None  # init() で設定
 _request_cost: ContextVar[int] = ContextVar("request_cost", default=0)
 
 
-def init(db_path: Path) -> None:
-    """SQLite を初期化し、PRAGMA を設定し、起動時の SUM 復元を行う。"""
+# 設計判断（実装結果反映）:
+# - 当初案では QuotaSnapshot (NamedTuple) を返す get_snapshot() と、router 側で
+#   _build_quota_from_snapshot(snap, last_call_cost) で Quota を組み立てる二段構成
+#   としていた。実装では get_snapshot() が ContextVar 由来の last_call_cost も含めて
+#   Pydantic Quota を直接返すよう一本化（NamedTuple 中間層を廃止）。
+# - 当初案では init_db() と restore_from_db() の 2 関数だったが、init(db_path, now_utc=None)
+#   に統合（テーブル作成 + PRAGMA + SUM 復元を 1 関数で完結）。
 
-def add_units(cost: int) -> None:
+def init(db_path: Path | str, now_utc: datetime | None = None) -> None:
+    """SQLite を初期化し、PRAGMA を設定し、起動時の SUM 復元を行う。
+
+    `now_utc` はテスト用に注入可能（None なら `datetime.now(timezone.utc)`）。
+    """
+
+def add_units(cost: int, now_utc: datetime | None = None) -> None:
     """YouTube API サブ呼び出し成功時に units を加算。
 
     更新先（3 つ）:
-      1. **in-memory の `consumed_units_today`**（プロセスグローバル、`threading.Lock` 保護）
+      1. **in-memory の `consumed_units_today`**（プロセスグローバル、`threading.RLock` 保護）
       2. **SQLite `quota_state` テーブル**（永続化）
       3. **ContextVar `_request_cost`**（リクエストローカル累計、後述）
 
     `api_calls` テーブルには書かない（責務分離: `api_calls` への INSERT は
-    `youtube_search._record_api_call` が /search リクエスト終端で 1 回だけ実行する）。
+    `quota_tracker.record_api_call` が /search・/summary リクエスト終端で 1 回だけ実行する）。
 
     並行リクエストでの last_call_cost 算出のため、ContextVar に **同時に**累積する。
     `_state["consumed_units_today"]` の差分で計算すると並行リクエストの分が混入するため不可。
     """
 
 def reset_request_cost() -> None:
-    """router 先頭で呼ぶ: 当該リクエストでの cost 累計を 0 に初期化。
-
-    FastAPI は各リクエストを個別の async タスクで処理し、ContextVar はタスクごとに
-    値が独立するため、ここでの set(0) は同一リクエストの後続 add_units 呼び出しにのみ効く。
-    """
+    """router 先頭で呼ぶ: 当該リクエストでの cost 累計を 0 に初期化。"""
     _request_cost.set(0)
 
 def get_request_cost() -> int:
-    """当該リクエストで `add_units` を通じて消費した cost の合計を返す。
-
-    router の最後で snapshot と組み合わせて `Quota.last_call_cost` を確定する。
-    """
+    """当該リクエストで `add_units` を通じて消費した cost の合計を返す。"""
     return _request_cost.get()
 
 def is_exhausted(now_utc: datetime | None = None) -> bool:
     """日次クォータが枯渇しているか（推定 or 403 強制）。PT 0:00 跨ぎで自動リセット。"""
 
-def mark_exhausted(reason: str = "youtube_403") -> None:
-    """YouTube 403 quotaExceeded 受信時に呼ぶ。次の PT 0:00 まで枯渇扱い。"""
+def mark_exhausted(reason: str = "youtube_403", now_utc: datetime | None = None) -> None:
+    """YouTube 403 quotaExceeded 受信時に呼ぶ。次の PT 0:00 まで枯渇扱い（in-memory のみ、
+    プロセス再起動越えの永続化は **MVP 対象外** — FR-8 の権威レイヤ要件は「内部カウンタに
+    関係なく即 QUOTA_EXCEEDED に倒す」までで、再起動越えは明示要件外）。"""
 
-def get_snapshot(now_utc: datetime | None = None) -> QuotaSnapshot:
-    """現在のクォータ状態を返す（レスポンスの quota フィールド組み立て用）。"""
+def get_snapshot(now_utc: datetime | None = None) -> Quota:
+    """現在のクォータ状態を Pydantic `Quota` モデルで返す（last_call_cost は ContextVar 由来）。
+
+    NamedTuple 中間層は廃止し、router 側ではこの戻り値を `model_copy(update=...)` で
+    レスポンスに同梱する。
+    """
+
+def record_api_call(
+    endpoint: str, input_summary: str | None, units_cost: int,
+    http_status: int, http_success: bool, error_code: str | None,
+    transcript_success: bool | None = None,
+    transcript_language: str | None = None,
+    result_count: int | None = None,
+    now_utc: datetime | None = None,
+) -> None:
+    """`api_calls` に 1 行 INSERT。`quota_state` には触らない（責務分離）。"""
 
 def reset() -> None:
-    """テスト用: プロセス内状態と SQLite を初期化。"""
+    """テスト用: プロセス内状態をクリア（SQLite ファイルは残る）。"""
 
 def _next_pt_midnight_utc(now_utc: datetime) -> datetime:
     """次の PT 0:00 を UTC で返す。zoneinfo が DST 自動処理。"""
@@ -1074,7 +1090,7 @@ flowchart LR
     Internal["内部例外"]
     Auth["X-API-KEY 不正"]
     Schema["リクエスト不正"]
-    Burst["1分10回超過"]
+    Burst["60秒10回超過"]
 
     QE["QUOTA_EXCEEDED"]
     RL["RATE_LIMITED"]
@@ -1449,7 +1465,7 @@ for i in $(seq 1 11); do curl -i -X POST .../search -H ... -d '{"q":"x"}'; done
 | #6 transcript 除外 | 3.4, 7.3 | SS-11 |
 | #7 派生値 | 7.1 | SS-7, SS-8 |
 | #8 quota | 3.2, 3.4, 3.7, 6.3 | SR-4, ST-9, SU-1, SU-4, SU-5, SQ-9 |
-| #9 1分10回 | 3.3, 4.2 | AR-2, AR-3, ST-5 |
+| #9 60秒10回 | 3.3, 4.2 | AR-2, AR-3, ST-5 |
 | #10 QUOTA_EXCEEDED | 4.3, 3.2 | SQ-5, SQ-6, ST-6 |
 | #11 PT 0:00 リセット | 3.2, 8.2 | SQ-4 |
 | #12 asyncio.Lock | 3.3 | AR-5 |
