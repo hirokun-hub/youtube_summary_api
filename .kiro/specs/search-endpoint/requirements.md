@@ -445,15 +445,15 @@ data/
 └── usage/
     └── usage.db              # SQLite（.gitignore）
 tests/
-├── test_search_service.py    # 新規
-├── test_search_endpoint.py   # 新規
-├── test_quota_tracker.py     # 新規
-├── test_async_rate_limiter.py # 新規: asyncio.Lock + sliding window
-├── snapshots/                # 新規: 実 API レスポンスのスキーマスナップショット
+├── test_search_service.py    # 新規（MVP）
+├── test_search_endpoint.py   # 新規（MVP）
+├── test_quota_tracker.py     # 新規（MVP、DST 境界テストは Phase 2 で追加）
+├── test_async_rate_limiter.py # 新規（MVP）: asyncio.Lock + sliding window
+├── snapshots/                # 📅 Phase 2: 実 API レスポンスのスキーマスナップショット
 │   ├── search_list_sample.json
 │   ├── videos_list_sample.json
 │   └── channels_list_sample.json
-└── live/                     # 新規: 実 API 統合テスト (RUN_LIVE_YOUTUBE_TESTS=1 で有効化)
+└── live/                     # 📅 Phase 2: 実 API 統合テスト (RUN_LIVE_YOUTUBE_TESTS=1 で有効化)
     └── test_youtube_search_live.py
 ```
 
@@ -472,6 +472,8 @@ tests/
 
 ### テスト方針（3層構成、TC-12 参照）
 
+第1層は MVP の必達、第2層・第3層は Phase 2 で着手する（受け入れ基準 #19 / #20 に対応）。
+
 #### 第1層: 通常 CI、全モック
 
 - 既存97件 + 新規テストを追加
@@ -479,7 +481,8 @@ tests/
 - テスト対象:
   - search サービス層（videos.list/channels.list バッチ、派生値計算、重複排除、`itertools.batched` 分割）
   - search エンドポイント統合（成功、401、422、429×2種、500、503）
-  - quota_tracker 単体（PT 0:00 リセット境界、DST 開始・終了、再起動後の SQLite 復元）
+  - quota_tracker 単体（PT 0:00 リセット境界、再起動後の SQLite 復元）
+    ※ DST 開始・終了の明示的境界テストは Phase 2（受け入れ基準 #21）
   - async レート制限（`asyncio.Lock` のスレッドセーフ性、`Retry-After` ヘッダ付与）
   - 既存 `/summary` テストの回帰（quota フィールド付与で壊れないこと）
 
@@ -535,7 +538,7 @@ tests/
 - `zoneinfo.ZoneInfo("America/Los_Angeles")` を使用（IANA 正式名。`US/Pacific` は非推奨のエイリアス）
 - リセット時刻は `datetime.combine(now_pt.date() + timedelta(days=1), time.min, tzinfo=PT).astimezone(timezone.utc)` で算出
 - 内部処理は常に UTC で保持、PT への変換は表示時のみ
-- DST 境界テストを必ず含める: 2026-03-08 開始・2026-11-01 終了、PT 0:00 の前後±1分、`fold` 属性を伴う曖昧時刻
+- DST 切替自体は `zoneinfo` が自動処理するため MVP では追加実装不要。**DST 境界テスト（2026-03-08 開始 / 2026-11-01 終了、PT 0:00 前後±1分、`fold` 属性を伴う曖昧時刻）は Phase 2 で追加**（受け入れ基準 #21）
 
 ### TC-6: search.list のパラメタ
 
@@ -580,8 +583,9 @@ tests/
 ### TC-10: Pydantic v2 スキーマ
 
 - 型ヒントは **`X | None`** で統一（`Optional[X]` は新規コードで使わない）
-- `@computed_field` を使って `remaining_units_estimate` / `reset_in_seconds` を動的計算
+- `@computed_field` を使うのは `remaining_units_estimate`（= `daily_limit - consumed_units_today`）のみ。**`reset_in_seconds` は素フィールドとして応答時刻で確定した値を渡す**（`@computed_field` で `datetime.now()` を動的評価するとシリアライズ時刻ごとに値がブレ、`reset_at_utc` との整合が崩れるため）
 - 全レスポンスモデルに `model_config = ConfigDict(frozen=True, extra="forbid")` を適用
+  - **例外（本 PR スコープ）**: 既存 `SummaryResponse` は `frozen=True` 化を **本 PR では見送る**。理由は既存 97 件のテスト互換と iPhone ショートカット後方互換のため、現状の mutable 挙動を保持する必要があるため。本 PR で新規追加する `Quota` / `SearchResult` / `SearchResponse` は本要件どおり `frozen=True` を適用する。`SummaryResponse` の frozen 化は Phase 2 以降で既存テストの `model_copy(update=...)` 移行と合わせて行う
 - `RootModel` は使わない（`results` はフィールド）
 - `@model_validator(mode="after")` で `success` と `error_code` の相関制約を追加
 
@@ -628,6 +632,11 @@ tests/
 
 ## 受け入れ基準
 
+本受け入れ基準は **MVP（本 PR で必達）** と **Phase 2（後続フェーズで追加）** に分かれる。
+番号は履歴・テスト命名の安定性のため連続で維持する。
+
+### MVP（本 PR で必達）
+
 1. ✅ `POST /api/v1/search` が存在し、`X-API-KEY` で認証される（不正時は HTTP 401 + `error_code=UNAUTHORIZED`）
 2. ✅ `q` のみ指定で **最大 50 件**（YouTube 側ヒット数次第、`returned_count` は 0〜50）の結果が、すべての指定フィールド付きで返る（HTTP 200、`results` 配列の長さ = `returned_count`）
 3. ✅ リクエストボディのスキーマ違反（`q` 未指定、`order` 列挙外など）で HTTP 422 が返る
@@ -638,7 +647,7 @@ tests/
 8. ✅ `quota` オブジェクトが **認証通過後の `/search` 業務レスポンス（200 / 429 / 503 / 500）** および **`/summary` のすべてのレスポンス**に含まれる（`remaining_units_estimate`, `reset_in_seconds` 含む）。`/search` の 401 / 422 には `quota` を含めない
 9. ✅ 直近 1 分に 11 回目を叩くと **HTTP 429** + `Retry-After: <秒数>` ヘッダ + `error_code=CLIENT_RATE_LIMITED` が返り、ルール本文と `retry_after` 秒数がメッセージに含まれる
 10. ✅ YouTube が 403 quotaExceeded を返す or 内部カウンタが 10,000 到達すると **HTTP 429** + `Retry-After` + `error_code=QUOTA_EXCEEDED` が返る。`reset_at_utc` / `reset_at_jst` / `reset_in_seconds` が正しい（`reset_in_seconds` は応答時点の現在 UTC と reset_at_utc の差と一致）
-11. ✅ PT 0:00 を跨ぐと内部カウンタが 0 にリセットされる（2026-03-08 DST 開始 / 2026-11-01 DST 終了の両テストが通る）
+11. ✅ PT 0:00 を跨ぐと内部カウンタが 0 にリセットされる
 12. ✅ `asyncio.Lock` がスライディングウィンドウ実装で使われている（`threading.Lock` 不使用）
 13. ✅ SQLite 接続で `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`, `foreign_keys=ON` が適用されている
 14. ✅ プロセス再起動後、SQLite の `api_calls` から `consumed_units_today` が再計算される
@@ -646,8 +655,14 @@ tests/
 16. ✅ `data/usage/` が `.gitignore` 対象である
 17. ✅ 既存の `/summary` のすべてのテスト（97 件）が quota 追加後も通る（HTTP 200 固定が維持されている）
 18. ✅ 新規テスト（サービス層・エンドポイント・quota_tracker・async レート制限）が追加され、全モックで実行できる
-19. ✅ スキーマスナップショットテスト（`tests/snapshots/*.json`）が追加されている
-20. ✅ 実 API 統合テストが `RUN_LIVE_YOUTUBE_TESTS=1` で有効化できる形で追加されている
+
+### Phase 2（後続フェーズで追加）
+
+19. 📅 スキーマスナップショットテスト（`tests/snapshots/*.json`）が追加されている
+20. 📅 実 API 統合テストが `RUN_LIVE_YOUTUBE_TESTS=1` で有効化できる形で追加されている
+21. 📅 DST 境界テスト（2026-03-08 開始 / 2026-11-01 終了）が `tests/test_quota_tracker.py` に追加されている
+
+> Phase 2 の 3 項目は、`zoneinfo` の DST 自動処理と Pydantic v2 のスキーマ柔軟性に依拠して MVP 段階で機能上の問題が出ない見込み。実害の前提が立った時点で着手する。
 
 ## スコープ外（このPRでやらないこと）
 
