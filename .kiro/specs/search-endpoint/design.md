@@ -340,9 +340,23 @@ search_rate_limiter = AsyncSlidingWindow(
 
 ### 3.4 `app/models/schemas.py` 拡張
 
+> 注: 本節は Phase 1 実装時の専門家レビューで追加された 4 項目の防御線（**TZ aware 強制 ×2 / q 空白拒否 / SearchResponse の frozen=True**）を反映済み。要件 FR-2 / FR-3 / FR-4 / FR-5 / TC-10 と完全整合する形に確定している。
+
 ```python
-from datetime import datetime
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from datetime import datetime, timedelta, timezone
+from typing import Annotated, Optional
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    computed_field,
+    field_validator,
+    model_validator,
+)
+
+_JST = timezone(timedelta(hours=9))  # reset_at_jst のオフセット検証用
 
 
 class Quota(BaseModel):
@@ -351,34 +365,78 @@ class Quota(BaseModel):
     `reset_in_seconds` は **応答時刻で確定した値** を `quota_tracker.get_snapshot(now_utc)`
     から受け取る素フィールド。`@computed_field` にしないのは、シリアライズ時刻ごとに
     `datetime.now()` が再評価されると `reset_at_utc` との整合が取れなくなるため。
+
+    `reset_at_utc` / `reset_at_jst` は **timezone-aware datetime のみ許可**
+    （FR-3 のレスポンス例 "2026-04-26T07:00:00Z" / "2026-04-26T16:00:00+09:00"
+    の表記を保証するため。Phase 1 専門家レビューの指摘を反映）。
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     consumed_units_today: int
     daily_limit: int = 10_000
     last_call_cost: int
-    reset_at_utc: datetime
-    reset_at_jst: datetime
-    reset_in_seconds: int   # quota_tracker が応答時刻で計算して注入する確定値
+    reset_at_utc: datetime    # UTC (+00:00) aware のみ
+    reset_at_jst: datetime    # +09:00 aware のみ
+    reset_in_seconds: int     # quota_tracker が応答時刻で計算して注入する確定値
 
     @computed_field
     @property
     def remaining_units_estimate(self) -> int:
         return max(0, self.daily_limit - self.consumed_units_today)
 
+    @field_validator("reset_at_utc")
+    @classmethod
+    def _ensure_utc_aware(cls, v: datetime) -> datetime:
+        if v.tzinfo is None:
+            raise ValueError("reset_at_utc は timezone-aware である必要があります")
+        if v.utcoffset() != timedelta(0):
+            raise ValueError("reset_at_utc は UTC (+00:00) である必要があります")
+        return v
+
+    @field_validator("reset_at_jst")
+    @classmethod
+    def _ensure_jst_aware(cls, v: datetime) -> datetime:
+        if v.tzinfo is None:
+            raise ValueError("reset_at_jst は timezone-aware である必要があります")
+        if v.utcoffset() != timedelta(hours=9):
+            raise ValueError("reset_at_jst は +09:00 オフセットである必要があります")
+        return v
+
 
 class SearchRequest(BaseModel):
-    """POST /api/v1/search リクエストボディ。"""
+    """POST /api/v1/search リクエストボディ。
+
+    `q` は `strip_whitespace=True, min_length=1`（空白のみクエリで YouTube クォータを浪費させない）。
+    `published_after` / `published_before` は **timezone-aware のみ許可**
+    （YouTube Data API v3 の publishedAfter/Before は RFC 3339 必須。naive を受けると
+    UTC か JST か曖昧になるため Phase 1 専門家レビューで防御線を追加）。
+    """
     model_config = ConfigDict(extra="forbid")
 
-    q: str = Field(..., min_length=1, description="検索クエリ（必須）")
-    order: str | None = Field(None, pattern="^(relevance|date|rating|viewCount|title)$")
-    published_after: datetime | None = None
-    published_before: datetime | None = None
-    video_duration: str | None = Field(None, pattern="^(any|short|medium|long)$")
-    region_code: str | None = Field(None, pattern="^[A-Z]{2}$")
-    relevance_language: str | None = Field(None, pattern="^[a-z]{2}$")
-    channel_id: str | None = None
+    q: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] = Field(
+        ..., description="検索クエリ（必須・空白のみは不可）"
+    )
+    order: Optional[str] = Field(None, pattern="^(relevance|date|rating|viewCount|title)$")
+    published_after: Optional[datetime] = None   # aware のみ
+    published_before: Optional[datetime] = None  # aware のみ
+    video_duration: Optional[str] = Field(None, pattern="^(any|short|medium|long)$")
+    region_code: Optional[str] = Field(None, pattern="^[A-Z]{2}$")
+    relevance_language: Optional[str] = Field(None, pattern="^[a-z]{2}$")
+    channel_id: Optional[str] = None
+
+    @field_validator("published_after", "published_before")
+    @classmethod
+    def _ensure_published_aware(cls, v: Optional[datetime]) -> Optional[datetime]:
+        """timezone-aware datetime のみ許可。サービス層では astimezone(UTC) で
+        正規化したうえで RFC 3339 (`...Z`) 文字列を YouTube に渡す。"""
+        if v is None:
+            return v
+        if v.tzinfo is None or v.utcoffset() is None:
+            raise ValueError(
+                "published_after / published_before は timezone-aware "
+                "(例: 'Z' または '+09:00' 付き ISO 8601 / RFC 3339) で指定してください"
+            )
+        return v
 
 
 class SearchResult(BaseModel):
@@ -414,18 +472,24 @@ class SearchResult(BaseModel):
 
 
 class SearchResponse(BaseModel):
-    """POST /api/v1/search レスポンス。"""
-    model_config = ConfigDict(extra="forbid")
+    """POST /api/v1/search レスポンス。
+
+    `frozen=True` を適用（要件 TC-10 / Phase 1 で requirements.md と整合させた最終形）。
+    router からの quota 注入は `response.model_copy(update={"quota": quota})` で行う。
+    401 など quota を含めないケースは router 側で `model_dump(exclude_none=True)` を
+    使うことで `quota` キー自体を欠落させる（test_sr4_search_response_401_excludes_quota_key_in_dump で契約固定）。
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     success: bool
     message: str
-    error_code: str | None = None
-    query: str | None = None
-    total_results_estimate: int | None = None
-    returned_count: int | None = None
-    results: list[SearchResult] | None = None
-    retry_after: int | None = None
-    quota: Quota | None = None  # 401/422 では None
+    error_code: Optional[str] = None
+    query: Optional[str] = None
+    total_results_estimate: Optional[int] = None
+    returned_count: Optional[int] = None
+    results: Optional[list[SearchResult]] = None
+    retry_after: Optional[int] = None
+    quota: Optional[Quota] = None  # 401/422 では None（exclude_none=True でキーごと欠落）
 
     @computed_field
     @property

@@ -2,7 +2,7 @@
 
 本タスクリストは `.kiro/specs/search-endpoint/design.md`（1500+ 行、mermaid 図 7 枚、ContextVar 方式の quota 注入を含む確定設計書）に基づき、`POST /api/v1/search` 追加と既存 `/summary` への `quota` 注入を **テスト駆動（RED → GREEN → REFACTOR）** で実装する手順を定義する。
 
-- 完了基準: `pytest tests/ -v` で **既存 97 件 + 新規 47 件 = 144 件** すべて PASS（内訳: SR 7 / SQ 9 / AR 5 / SS 12 / ST 9 / SU 5）
+- 完了基準: `pytest tests/ -v` で **既存 97 件 + 新規 50+ 件 = 147+ 件** すべて PASS（内訳: SR 7 系列＝50 件 / SQ 9 / AR 5 / SS 12 / ST 9 / SU 5）。SR は parametrize 展開と Phase 1 専門家レビューで追加した防御線（Quota の TZ aware ×2、q の空白拒否、published_*/before の TZ aware、401 quota キー欠落契約）を含めて 50 件まで膨らんでいる
 - 仮運用: `compose.staging.yml`（ポート 10001）で本番 `:10000` を生かしたまま並走 → 機能 OK で本番 `compose.yml` に上書き
 - スコープ: MVP のみ。DST 境界テスト・スキーマスナップショット・ライブテストは Phase 2（受け入れ基準 #19/#20/#21）として **後続フェーズ** で着手
 
@@ -26,8 +26,8 @@
 
 ## Phase 1: モデル + 定数（RED → GREEN）
 
-- [ ] 1. 定数を拡張する
-  - [ ] 1.1 `app/core/constants.py` に search 用定数を追加する
+- [x] 1. 定数を拡張する
+  - [x] 1.1 `app/core/constants.py` に search 用定数を追加する
     - エラーコード: `ERROR_QUOTA_EXCEEDED`, `ERROR_UNAUTHORIZED`（既存の 7 種は不変）
     - メッセージ: `MSG_QUOTA_EXCEEDED`, `MSG_UNAUTHORIZED`, `MSG_CLIENT_RATE_LIMITED`（テンプレート、`{rule}` `{retry_after}` 含む）
     - レート制限: `SEARCH_RATE_LIMIT_WINDOW_SECONDS = 60`, `SEARCH_RATE_LIMIT_MAX_REQUESTS = 10`
@@ -37,8 +37,8 @@
     - **既存定数の変更**: `YOUTUBE_API_V3_CHANNELS_PART = "statistics"` を `"snippet,statistics"` に変更（`channel_created_at` 取得のため）
     - _要件: 受け入れ基準 #5, #9, #10, #13、設計書 §3.1, FR-10_
 
-- [ ] 2. スキーマテストを書く（RED）
-  - [ ] 2.1 `tests/test_search_schemas.py` にテスト SR-1〜SR-7 を実装する
+- [x] 2. スキーマテストを書く（RED）
+  - [x] 2.1 `tests/test_search_schemas.py` にテスト SR-1〜SR-7 系を実装する（実装後 Phase 1 専門家レビューで以下 4 種の追加検証を含めた最終形に拡張: ① `Quota.reset_at_utc/jst` の TZ aware 強制、② `SearchRequest.q` の `strip_whitespace=True`、③ `SearchRequest.published_after/before` の TZ aware 強制、④ 401 レスポンスで `model_dump(exclude_none=True)` 時に `quota` キーが欠落することの契約）
     - SR-1: `SearchRequest` の `q` 必須・他フィールド任意、`order` 列挙、`published_after/before` ISO 8601 検証
     - SR-2: `Quota` モデルの全 7 フィールド、`remaining_units_estimate = daily_limit - consumed_units_today` の `@computed_field`、`reset_in_seconds` は素フィールド（`@computed_field` ではない）
     - SR-3: `SearchResult` の必須フィールド存在と派生値（`like_view_ratio` 等）が `float | None`
@@ -49,8 +49,8 @@
     - 実行 → **全件失敗（RED）** を確認: `pytest tests/test_search_schemas.py -v`
     - _要件: 受け入れ基準 #2, #5, #6, #8、設計書 §3.4, §9.2_
 
-- [ ] 3. レスポンスモデルを実装する（GREEN）
-  - [ ] 3.1 `app/models/schemas.py` に新規モデルを追加する
+- [x] 3. レスポンスモデルを実装する（GREEN）
+  - [x] 3.1 `app/models/schemas.py` に新規モデルを追加する（実装最終形は design.md §3.4 に反映済み: `Quota` の TZ aware validator、`SearchRequest.q` の `StringConstraints(strip_whitespace=True, min_length=1)`、`SearchRequest.published_*/before` の aware validator、`SearchResponse.frozen=True` を含む）
     - `SearchRequest`（q + 7 任意フィールド、`@field_validator` で ISO 8601 / 列挙チェック）
     - `Quota`（7 フィールド、`@computed_field` は `remaining_units_estimate` のみ）
     - `SearchResult`（22 フィールド、派生値 3 種、`has_caption: bool`、`ConfigDict(frozen=True, extra="forbid")`）
@@ -59,11 +59,11 @@
     - **`SummaryResponse` は frozen を追加しない**（既存挙動・既存 97 件テスト維持のため。**requirements.md TC-10 に「本 PR スコープでの例外」として明記済み**。Phase 2 以降で既存テストの `model_copy(update=...)` 移行と合わせて frozen 化する）
     - **設計書 §3.4 で `SearchResponse` が `extra="forbid"` のみ になっている部分は、本タスクで requirements.md TC-10 に整合させる形で実装時に `frozen=True` を追加する**（design.md と requirements.md の不整合解消）
     - _要件: 設計書 §3.4, TC-10_
-  - [ ] 3.2 `SummaryResponse` に `quota: Quota | None = None` を追加する
+  - [x] 3.2 `SummaryResponse` に `quota: Quota | None = None` を追加する
     - 既存フィールドは名前・型・順序すべて不変（追加のみ）
     - `model_config.json_schema_extra` の例も更新
     - _要件: 受け入れ基準 #8, #17、設計書 §3.7_
-  - [ ] 3.3 テスト実行 → **全件成功（GREEN）** を確認
+  - [x] 3.3 テスト実行 → **全件成功（GREEN）** を確認
     - `pytest tests/test_search_schemas.py tests/test_schemas.py -v`
     - 既存 `test_schemas.py` の S-1〜S-6（6 件）も PASS していること
     - _要件: 受け入れ基準 #17_
@@ -397,7 +397,7 @@
 
 | Phase | 検証コマンド | 期待結果 |
 |---|---|---|
-| 1 | `pytest tests/test_search_schemas.py tests/test_schemas.py -v` | SR-1〜SR-7 (7) + S-1〜S-6 (6) PASS |
+| 1 | `pytest tests/test_search_schemas.py tests/test_schemas.py -v` | SR-1〜SR-7 系 (50, parametrize と専門家レビュー追加分を含む) + S-1〜S-6 (6) PASS |
 | 2 | `pytest tests/test_async_rate_limiter.py tests/test_quota_tracker.py -v` | AR-1〜AR-5 (5) + SQ-1〜SQ-9 (9) PASS |
 | 3 | `pytest tests/test_search_service.py -v` | SS-1〜SS-12 (12) PASS |
 | 4 | `pytest tests/test_search_endpoint.py -v` | ST-1〜ST-9 (9) PASS |
