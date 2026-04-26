@@ -294,8 +294,8 @@
 
 ## Phase 5: /summary への quota 注入 + 既存回帰
 
-- [ ] 13. /summary quota 注入 + 履歴記録テストを書く（RED）
-  - [ ] 13.1 `tests/test_summary_quota_injection.py` にテスト SU-1〜SU-5 を実装する。**履歴記録アサーション**（受け入れ基準 #15）を全テストに含める形で、各テスト後に `api_calls` を検証する
+- [x] 13. /summary quota 注入 + 履歴記録テストを書く（RED）
+  - [x] 13.1 `tests/test_summary_quota_injection.py` にテスト SU-1〜SU-5 を実装する。**履歴記録アサーション**（受け入れ基準 #15）を全テストに含める形で、各テスト後に `api_calls` を検証する
     - SU-1: 正常完了 → `body.quota.last_call_cost == 2`、`body.quota.consumed_units_today == pre + 2`、HTTP 200。**`api_calls` に 1 行 INSERT、`endpoint="summary"` / `units_cost=2` / `http_status=200` / `http_success=True` / `error_code=NULL` / `transcript_success=True` / `transcript_language="ja"`**
     - SU-2: 既存 `success=True` レスポンスに `quota` が常に含まれる（業務処理を通った場合は必ず付与）
     - SU-3: HTTP は **200 固定**（`/search` と異なり、エラー時も 200）— 既存の `/summary` 挙動維持
@@ -304,8 +304,8 @@
     - 実行 → **全件失敗（RED）** を確認
     - _要件: 受け入れ基準 #8, #15, #17、設計書 §3.7, §9.7, FR-9_
 
-- [ ] 14. /summary を 3 経路 quota 注入 + 履歴記録に改造する（GREEN）
-  - [ ] 14.1 `app/routers/summary.py` を改造する
+- [x] 14. /summary を 3 経路 quota 注入 + 履歴記録に改造する（GREEN）
+  - [x] 14.1 `app/routers/summary.py` を改造する
     - **try / finally で履歴記録を保証**（受け入れ基準 #15、`/summary` の **全リクエスト** が記録対象）
     - `SummaryResponse` は frozen を追加しないため `response.quota = ...` の直接代入も可能。ただし **新規 router 経路では一貫性のため `response.model_copy(update={"quota": quota})` を推奨**（`/search` と同じイディオム）
     - 経路 1（rate limit 早期）: `quota_tracker.reset_request_cost()` → `check_request()` 拒否なら `SummaryResponse(success=False, quota=_build_quota_from_snapshot(snap, last_call_cost=0), **blocked)` を **コンストラクタで一気に組む**（後代入を避ける）
@@ -313,22 +313,28 @@
     - 経路 3（早期エラー、サービス層が `success=False` を返した場合）: 経路 2 と同じく `model_copy(update=...)` で注入。`get_request_cost()` で途中まで進んだ units 数を反映
     - 既存の HTTP 200 固定・既存フィールドの型・順序は **完全不変**
     - **finally で履歴記録（router 内一元記録）**: `quota_tracker.record_api_call(endpoint="summary", input_summary=video_id_or_url, units_cost=quota_tracker.get_request_cost(), http_status=200, http_success=response.success, error_code=response.error_code, transcript_success=(response.transcript is not None), transcript_language=response.transcript_language, result_count=None)` を 3 経路すべての終端で呼ぶ。グローバル例外ハンドラからは **呼ばない**（二重 INSERT 防止、`/search` と同じ方針）
+    - **実装差分（Phase 5 完了後追記）**:
+      ① `record_api_call` の例外を **`try/except` で warning に倒す**。理由は TestClient が lifespan を再実行しないため `quota_tracker` が未 init のままになる既存 97 件テスト環境で `record_api_call` の `RuntimeError` が router を破壊するのを避けるため（本番では lifespan 起動時に init 済み）。/search 側 router と同じイディオム（`logger.exception` → `logger.warning`）
+      ② `input_summary` は **`_extract_video_id(video_url) or video_url`** で記録。requirements.md L387 / design.md L1046 が `q or video_id` を指定するため、URL 全体ではなく抽出した video_id を優先記録（INVALID_URL ケースは原 URL を fallback として残す）
+      ③ `_build_quota_from_snapshot` ヘルパは **作らない**。`quota_tracker.get_snapshot()` が既に `Quota` を直接返すため、`response.model_copy(update={"quota": snap})` だけで完結
+      ④ `try/finally` で履歴記録を **一元化**（design.md §3.7 の「各経路で個別 return」案ではなく、終端を 1 箇所に集約して受け入れ基準 #15 を確実に満たす）
     - _要件: 受け入れ基準 #8, #15, #17、設計書 §3.7, FR-9_
-  - [ ] 14.2 `app/services/youtube.py` の `get_summary_data` 内で `add_units(1)` を videos.list / channels.list の各呼び出し直後に追加する
+  - [x] 14.2 `app/services/youtube.py` の `get_summary_data` 内で `add_units(1)` を videos.list / channels.list の各呼び出し直後に追加する
     - 既存ロジック・既存戻り値は不変、`add_units` 呼び出しのみを挿入
+    - **実装差分**: `_fetch_metadata_youtube_api` 内で videos.list 成功直後 (`is_retryable_failure=False` かつ `error_code is None` の判定後)、および channels.list の `channels_result.data` が真値のときに `quota_tracker.add_units(QUOTA_COST_VIDEOS_LIST)` / `add_units(QUOTA_COST_CHANNELS_LIST)` を呼ぶ
     - _要件: 受け入れ基準 #8、設計書 §3.7_
-  - [ ] 14.3 テスト実行 → **全件成功（GREEN）** を確認
+  - [x] 14.3 テスト実行 → **全件成功（GREEN）** を確認
     - `pytest tests/test_summary_quota_injection.py -v`
+    - **実績**: SU-1〜SU-5 の **5 件 PASS**
 
-- [ ] 15. 既存回帰確認 + 全件 PASS 確認
-  - [ ] 15.1 既存テスト 97 件の PASS を再確認する
+- [x] 15. 既存回帰確認 + 全件 PASS 確認
+  - [x] 15.1 既存テスト 97 件の PASS を再確認する
     - `pytest tests/test_youtube_service.py tests/test_api_endpoint.py tests/test_schemas.py tests/test_rate_limiter.py -v`
     - **全 97 件 PASS** が必須（quota 追加で壊れていないこと）
     - _要件: 受け入れ基準 #17_
-  - [ ] 15.2 全テスト合計の PASS を確認する
+  - [x] 15.2 全テスト合計の PASS を確認する
     - `pytest tests/ -v`
-    - **既存 97 + 新規 47 = 144 件すべて PASS**
-    - 失敗があれば該当 Phase に戻って修正
+    - **実績**: **207 件 PASS**（既存 97 + Phase 1 SR 50 + Phase 2 AR/SQ 15 + Phase 3 SS+防御 31 + Phase 4 ST 9 + Phase 5 SU 5）。失敗 0、回帰 0
     - _要件: 受け入れ基準 #17, #18_
 
 ## Phase 6: 仮運用（staging、別ポート）
@@ -419,7 +425,7 @@
 | 2 | `pytest tests/test_async_rate_limiter.py tests/test_quota_tracker.py -v` | AR-1〜AR-5 (5) + SQ-1〜SQ-9 + 追加 mark_exhausted カバレッジ (10) = **15 PASS**（実績） |
 | 3 | `pytest tests/test_search_service.py -v` | **31 件 PASS**（実績）: SS-1〜SS-12 系列 22 件（parametrize 展開含む） + Phase 3 専門家レビュー対応の防御テスト 9 件 |
 | 4 | `pytest tests/test_search_endpoint.py -v` | ST-1〜ST-9 (9) PASS |
-| 5 | `pytest tests/ -v` | **Phase 3 完了時点の実績: 193 件 PASS**（既存 97 + Phase 1 SR 50 + Phase 2 AR/SQ 15 + Phase 3 SS+防御 31）。Phase 4 完了で ST 9 件追加、Phase 5 完了で SU 5 件追加の見込み |
+| 5 | `pytest tests/ -v` | **Phase 5 完了時点の実績: 207 件 PASS**（既存 97 + Phase 1 SR 50 + Phase 2 AR/SQ 15 + Phase 3 SS+防御 31 + Phase 4 ST 9 + Phase 5 SU 5）。回帰 0 |
 | 6 | `docker compose -f compose.staging.yml up -d` + curl | 5 種 HTTP（200/401/422/429）が staging で確認できる |
 | 7 | `docker compose up -d` + iPhone ショートカット | 本番 `/summary` 後方互換 + 新規 `/search` 動作 |
 

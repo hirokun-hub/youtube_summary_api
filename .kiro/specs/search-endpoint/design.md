@@ -814,6 +814,17 @@ async def get_summary(...):
 - **rate limit 早期 return**: API 呼び出しなし → `get_request_cost() == 0`
 - **service 経路**: サービス内で `add_units(1)` × N 回が呼ばれ、`get_request_cost() == N`（VIDEO_NOT_FOUND の途中失敗なら 1、完全成功なら 2）
 
+#### Phase 5 実装結果との差分（実装後追記）
+
+上記擬似コードは Phase 5 着手前の暫定設計。実装では以下に変更した（いずれも要件 #8 / #15 / #17 を厳密に満たすための調整）:
+
+1. **`_build_quota_from_snapshot` ヘルパ廃止**: タスク 7.1 で `quota_tracker.get_snapshot()` が `app.models.schemas.Quota` を **直接返す** 契約に確定済み（`QuotaSnapshot` NamedTuple は実装で採用しなかった）。`last_call_cost` も snapshot 内で `_request_cost.get()` から組み立てるため、router 側の変換ヘルパは不要
+2. **`model_copy(update={"quota": snap})` を採用**: `SummaryResponse` は frozen ではないが、`/search` の `SearchResponse`（`frozen=True`）と **同じイディオム** に統一して可読性を確保。`response.quota = snap` の直接代入は採用しない
+3. **`try/finally` で履歴記録を一元化**: design.md §3.7 では各経路で個別 `return` していたが、受け入れ基準 #15「`/summary` の **全リクエスト** が `api_calls` に記録される」を満たすため、`try/finally` パターンで終端を 1 つに集約。`record_api_call(endpoint='summary', ...)` を finally で呼ぶ
+4. **`record_api_call` を `try/except` で warning に倒す**: TestClient は lifespan を再実行しないため `quota_tracker` 未 init のままになる既存 97 件テスト環境で `RuntimeError` が router を破壊するのを避ける（本番では lifespan で init 済み）。`/search` 側の `record_api_call` 例外捕捉と同方針
+5. **`input_summary` は `video_id` 優先**: requirements.md L387 / design.md L1046 の `q or video_id` 仕様に合わせ、`_extract_video_id(video_url) or video_url` で記録（INVALID_URL ケースは原 URL を fallback として残す）
+6. **`http_status=200` 固定で記録**: `/summary` は HTTP 200 固定（TC-9）のため `record_api_call` の `http_status` も 200 固定。`http_success` だけが `response.success` で True/False に分岐する
+
 #### `app/services/youtube.py`
 
 `channels.list` の `snippet` パース追加（既存ロジック不変、追加のみ）:
@@ -827,25 +838,36 @@ async def get_summary(...):
 
 `_call_youtube_api_with_retry` の呼び出し成功時に `quota_tracker.add_units(cost)` を加算する（既存箇所の修正、対応コスト分）。
 
+**実装結果（Phase 5 完了後追記）**: `add_units` の挿入箇所は `_call_youtube_api_with_retry` ではなく **`_fetch_metadata_youtube_api` 内** とした。
+- videos.list 成功時 (`videos_result.error_code is None` かつ `is_retryable_failure=False` の判定後): `quota_tracker.add_units(QUOTA_COST_VIDEOS_LIST)` を呼ぶ（items が空でも 200 OK は YouTube 側で 1 unit 計上されるため、VIDEO_NOT_FOUND 早期 return より **前** に積む）
+- channels.list 成功時 (`channels_result.data` が真値): `quota_tracker.add_units(QUOTA_COST_CHANNELS_LIST)` を呼ぶ
+- `_call_youtube_api_with_retry` には触らない（汎用 HTTP リトライラッパで cost を知らない方が責務が明確）
+
 **注意: `_classify_api_error` は変更しない**。`/summary` の既存 `error_code` 集合（`INVALID_URL` / `VIDEO_NOT_FOUND` / `TRANSCRIPT_NOT_FOUND` / `TRANSCRIPT_DISABLED` / `RATE_LIMITED` / `CLIENT_RATE_LIMITED` / `METADATA_FAILED` / `INTERNAL_ERROR` の 8 種）に新エラーコード `QUOTA_EXCEEDED` を漏らさないため、新エラーコード分類は `youtube_search.py` 内の `_classify_search_api_error` で `/search` 専用に行う（§3.5 参照）。
 
 #### `main.py`
 
+**実装結果（Phase 2 / Phase 4 完了後）**: `@app.on_event("startup")` は FastAPI 0.110+ で非推奨警告のため、`@asynccontextmanager` ベースの **`lifespan`** に統一した。`SearchHTTPException` 専用ハンドラも同ファイルに置く（§6.2 参照）。
+
 ```python
+from contextlib import asynccontextmanager
+from pathlib import Path
+from fastapi import FastAPI
+from app.core import quota_tracker
+from app.core.constants import USAGE_DB_PATH
 from app.routers import search as search_router
 from app.routers import summary as summary_router
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    db_path = Path(USAGE_DB_PATH)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    quota_tracker.init(db_path)
+    yield
+
+app = FastAPI(title="YouTube Summary API", lifespan=_lifespan)
 app.include_router(summary_router.router)
 app.include_router(search_router.router)  # 追加
-
-# 起動イベントでクォータ追跡を初期化
-@app.on_event("startup")
-async def _startup() -> None:
-    from pathlib import Path
-    from app.core import quota_tracker
-    from app.core.constants import USAGE_DB_PATH
-    Path(USAGE_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-    quota_tracker.init(Path(USAGE_DB_PATH))
 ```
 
 #### `.gitignore`
