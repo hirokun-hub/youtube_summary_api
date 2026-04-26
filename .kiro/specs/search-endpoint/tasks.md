@@ -339,41 +339,58 @@
 
 ## Phase 6: 仮運用（staging、別ポート）
 
-- [ ] 16. staging 用 compose を作成する
-  - [ ] 16.1 `compose.staging.yml` を新規作成する
+- [x] 16. staging 用 compose を作成する
+  - [x] 16.1 `compose.staging.yml` を新規作成する
     - 内容（既存 `docker-compose.yml` をベースに以下を変更）:
       - `container_name: youtube-api-fastapi-staging`
       - `ports: "0.0.0.0:10001:10000"`（コンテナ内 10000、ホスト側 10001）
       - `volumes: ./data/usage:/app/data/usage`（SQLite 永続化）
       - `env_file` は本番と同一（`.env` / `.env.local`）
     - 既存 `docker-compose.yml` は **変更しない**（本番 `:10000` を生かし続ける）
+    - **実装差分（Phase 6 完了後追記）**: トップレベルに `name: youtube-api-staging` を追加し、本番プロジェクト (`youtube_summary_api`) と分離した。これがないと両 compose が同じ project + service 名 (`api`) を共有するため、staging 起動が本番コンテナを recreate してしまう問題が発生する（実際に 1 回検出して即修正）
     - _要件: 設計書 §11.2_
 
-- [ ] 17. staging を起動して機能チェックする
-  - [ ] 17.1 staging イメージをビルド・起動する
+- [x] 17. staging を起動して機能チェックする
+  - [x] 17.1 staging イメージをビルド・起動する
     - `docker compose -f compose.staging.yml build api`
     - `docker compose -f compose.staging.yml up -d`
     - `docker ps` で `youtube-api-fastapi`（本番）と `youtube-api-fastapi-staging`（staging）が **両方 running** であることを確認
-  - [ ] 17.2 curl で 5 種の HTTP ステータスを手動確認する
+    - **実績**: 本番 `:10000` (`youtube-api-fastapi` Up 9 minutes) と staging `:10001` (`youtube-api-fastapi-staging` Up 4 minutes) の並走を確認
+  - [x] 17.2 curl で 5 種の HTTP ステータスを手動確認する
     - 200: `curl -X POST http://localhost:10001/api/v1/search -H "X-API-KEY: $API_KEY" -H "Content-Type: application/json" -d '{"q":"test"}'`
     - 401: 上記から `X-API-KEY` ヘッダを削除
     - 422: `-d '{}'`（`q` 未指定）
     - 429: 11 回連続実行
     - 503: YouTube が 429 を返すケースは再現困難なので、`is_exhausted` mock パッチ実装の確認は単体テストで代替（手動では skip 可）
     - レスポンス JSON に `quota` オブジェクト（401/422 以外）が含まれることを目視確認
+    - **実績**:
+      - 200 (`{"q":"FastAPI tutorial"}`): `success=True, returned_count=50, quota.last_call_cost=102, quota.consumed_units_today=102`、`results[0]` に `has_caption=True / like_view_ratio=0.0226 / comment_view_ratio=0.000451 / channel_avg_views=61738`、`transcript`/`transcript_language`/`is_generated` フィールドは存在しない（受け入れ基準 #6 確認）
+      - 401 (header 欠落): `error_code=UNAUTHORIZED`, `quota` フィールド非同梱
+      - 422 (`{}`): `{"detail":[{"type":"missing","loc":["body","q"],...}]}`
+      - 429 (11 連発): #1-#10 すべて 200 + `quota` 同梱、#11 が `HTTP 429 / error_code=CLIENT_RATE_LIMITED / Retry-After: 52 / quota.last_call_cost=0 / quota.consumed_units_today=1122 / quota.remaining_units_estimate=8878` を返却
+      - 503 は仕様通り skip（ST-7/SS-9 単体テストで代替済み）
     - _要件: 受け入れ基準 #1, #2, #3, #8, #9, #10_
-  - [ ] 17.3 既存 `/summary`（`:10000`）が並行稼働していることを確認する
-    - `curl -X POST http://localhost:10000/api/v1/summary -H "X-API-KEY: $API_KEY" -d '{"video_url":"https://www.youtube.com/watch?v=..."}'`
+  - [x] 17.3 既存 `/summary`（`:10000`）が並行稼働していることを確認する
+    - `curl -X POST http://localhost:10000/api/v1/summary -H "X-API-KEY: $API_KEY" -d '{"url":"https://www.youtube.com/watch?v=..."}'`
     - 既存の iPhone ショートカット動作と同等のレスポンスが返ることを確認
-  - [ ] 17.4 Tailscale 経由で iPhone から疎通確認する
+    - **実績**: `dQw4w9WgXcQ` の URL で `HTTP 200, success=True, transcript_length=1422, quota.last_call_cost=2, quota.consumed_units_today=2`（本番コンテナは volume mount 無しのため独立した DB を保持）。既存 22 フィールド + `quota` の 23 フィールド全て存在を確認
+    - **タスクリスト差分**: 当初版タスクリスト 17.3 のサンプル `curl` は `video_url` キーになっていたが、実装の `VideoRequest` モデルは `url` キーを使用するため `video_url` で送ると 422 になる。本コミットでサンプルを `url` に修正済み（design.md §11.2 にも /summary サンプルはなく、誤りの出典はタスクリスト自身）
+    - **追加実績 (Phase 6 完了直前の補足検証)**: staging コンテナでも `/summary` 動作確認を実施。同 URL で `transcript_length=1422 / transcript_language=ja / is_generated=False / quota.last_call_cost=2 / consumed_units_today=1226` (search 13 件 + summary 1 件 = 14 行) を取得し、SQLite に `endpoint='summary' / transcript_success=1` で記録されることも確認
+  - [x] 17.4 Tailscale 経由で iPhone から疎通確認する
     - `:10001` のサービスを Tailscale ホスト名 + ポートで叩いて 200 が返ること
+    - **実績**: iPhone (`iphone-15-pro-max`) は 142 日 offline のため、同 Tailnet の Mac (`hiromac2025`) からの疎通検証で代替（Tailscale ルーティング検証としては等価）。Mac から `http://100.115.195.61:10001/api/v1/search` に X-API-KEY 付き POST を実行 → `HTTP 200, success=true, returned_count=50, quota.last_call_cost=102, quota.consumed_units_today=1224, quota.remaining_units_estimate=8776` を確認
     - _要件: 設計書 §11.2_
 
-- [ ] 18. SQLite 永続化と起動時 SUM 復元を確認する
-  - [ ] 18.1 staging で何度か `/search` を叩いた後、コンテナを再起動する
+- [x] 18. SQLite 永続化と起動時 SUM 復元を確認する
+  - [x] 18.1 staging で何度か `/search` を叩いた後、コンテナを再起動する
     - `docker compose -f compose.staging.yml restart api`
     - 起動後の `/search` レスポンスで `quota.consumed_units_today` が再起動前と同じ値（PT 0:00 跨ぎがなければ）になっていることを確認
     - `data/usage/usage.db` がホスト側に存在し、`sqlite3 data/usage/usage.db "SELECT COUNT(*) FROM api_calls"` で行数が増えていることを確認
+    - **実績**:
+      - 再起動前: `api_calls` 行数=1, `quota_state.consumed_units_today=102`, `PRAGMA journal_mode=wal`
+      - 再起動後ログ: `quota_tracker を初期化しました（DB: data/usage/usage.db, consumed_units_today: 102）` が出力 → SUM 復元成功
+      - 17.2 完了後の最終状態: `api_calls` 12 行（200×11 + 429×1）、`quota_state.consumed_units_today=1122`、合計 `units_cost=1122` 一致
+      - 全 12 行の breakdown: `(status=200, units=102, result_count=50)` × 11 行 + `(status=429, error_code=CLIENT_RATE_LIMITED, units=0)` × 1 行
     - _要件: 受け入れ基準 #14, #15_
 
 ## Phase 7: 本番上書き
@@ -390,7 +407,7 @@
   - [ ] 20.2 本番再ビルド・再起動する
     - `docker compose build api`
     - `docker compose up -d`（既存コンテナを置換）
-    - `docker logs youtube-api-fastapi --tail 50` で起動エラーがないこと、`init_db()` / `restore_from_db()` の起動ログが出ていることを確認
+    - `docker logs youtube-api-fastapi --tail 50` で起動エラーがないこと、`quota_tracker を初期化しました（DB: data/usage/usage.db, consumed_units_today: ...）` の起動ログが出ていることを確認（実装では `init()` 1 関数に集約されており、`init_db()` / `restore_from_db()` という分離関数は存在しない）
 
 - [ ] 21. 本番動作確認
   - [ ] 21.1 既存 `/summary` の後方互換確認
