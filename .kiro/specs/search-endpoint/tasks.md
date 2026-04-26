@@ -191,8 +191,8 @@
 
 ## Phase 4: router + エンドポイント統合（RED → GREEN）
 
-- [ ] 10. 認証依存を追加する
-  - [ ] 10.1 `app/core/security.py` に `verify_api_key_for_search` を追加する
+- [x] 10. 認証依存を追加する
+  - [x] 10.1 `app/core/security.py` に `verify_api_key_for_search` を追加する
     - **FastAPI の `HTTPException` には `error_code` 引数は存在しない**（`(status_code, detail, headers)` のみ）。`detail` を **dict** にして error_code を埋め込む形にする:
       ```python
       raise HTTPException(
@@ -204,8 +204,8 @@
     - 既存の `verify_api_key`（403 を投げる、`/summary` 用）には **触らない**
     - _要件: 受け入れ基準 #1、設計書 §3.7, FR-5_
 
-- [ ] 11. ルーター + 例外ハンドラのテストを書く（RED）
-  - [ ] 11.1 `tests/test_search_endpoint.py` にテスト ST-1〜ST-9 を実装する。**履歴記録アサーション**（受け入れ基準 #15）を全テストに含める形で、各テスト実行後に `api_calls` テーブルの行数と内容を検証する
+- [x] 11. ルーター + 例外ハンドラのテストを書く（RED）
+  - [x] 11.1 `tests/test_search_endpoint.py` にテスト ST-1〜ST-9 を実装する。**履歴記録アサーション**（受け入れ基準 #15）を全テストに含める形で、各テスト実行後に `api_calls` テーブルの行数と内容を検証する
     - ST-1: 正常リクエスト → HTTP 200 + `SearchResponse`、`quota.last_call_cost == 102`、`quota.consumed_units_today == pre + 102`。`_session.get` を 3 段 mock。**`api_calls` に 1 行 INSERT され、`endpoint="search"` / `units_cost=102` / `http_status=200` / `http_success=True` / `error_code=NULL` / `result_count=N`**
     - ST-2: `X-API-KEY` ヘッダなし → HTTP 401 + `error_code=UNAUTHORIZED`、`quota` フィールド **なし**。**`api_calls` には行追加なし**（認証通過前のため記録しない）
     - ST-3: `q` 未指定 → HTTP 422 + `{"detail": [...]}` 形式、`quota` **なし**、`success`/`error_code` **なし**。**`api_calls` には行追加なし**（バリデーション失敗のため記録しない）
@@ -220,8 +220,8 @@
     - 実行 → **全件失敗（RED）** を確認
     - _要件: 受け入れ基準 #1, #3, #8, #9, #10, **#15**、設計書 §3.6, §6, §9.6, FR-5, FR-9_
 
-- [ ] 12. ルーター + 例外ハンドラを実装する（GREEN）
-  - [ ] 12.1 `app/routers/search.py` を新規作成する
+- [x] 12. ルーター + 例外ハンドラを実装する（GREEN）
+  - [x] 12.1 `app/routers/search.py` を新規作成する
     - `router = APIRouter(prefix="/api/v1", tags=["Search"])`
     - `@router.post("/search", dependencies=[Depends(verify_api_key_for_search)])`（`response_model=SearchResponse` は付けない。HTTP status を経路ごとに変えるため `JSONResponse` で直接返す）
     - **router 内で `try / except / finally` を組み、認証通過後の全結果（200/429/503/500、想定例外も含む）を 1 箇所で記録する**（受け入れ基準 #15）。グローバル例外ハンドラ側では `record_api_call` を **呼ばない**（二重記録防止）
@@ -277,18 +277,20 @@
     - **`response.quota = ...` の直接代入は ValidationError**（SearchResponse が `frozen=True`）。**必ず `model_copy(update={"quota": quota})`** を使う
     - サービス層は `SearchResponse` を返す契約のため、router で `try/except YoutubeQuotaExceeded` のような **例外捕捉は行わない**（design.md §3.5 L491 と整合）。`except Exception` は router 内のバグ（service が想定外を返す等）の最終セーフティネット
     - _要件: 受け入れ基準 #15、設計書 §3.5, §3.6, FR-5, FR-9_
-  - [ ] 12.2 `main.py` に search ルータを include する
+  - [x] 12.2 `main.py` に search ルータを include する
     - `from app.routers import search as search_router`
     - `app.include_router(search_router.router)`
     - _要件: 受け入れ基準 #1_
-  - [ ] 12.3 FastAPI 例外ハンドラを `main.py`（または別ファイル）に追加する
+  - [x] 12.3 FastAPI 例外ハンドラを `main.py`（または別ファイル）に追加する
     - `RequestValidationError` → 422 `{"detail": [...]}`（既存 FastAPI 標準を維持）。**`record_api_call` を呼ばない**（バリデーション失敗は認証通過前と同等の扱い）
-    - `HTTPException` ハンドラ: `verify_api_key_for_search` が投げる `HTTPException(401, detail={...})` を捕捉。`detail` が dict なら **その内容をそのまま JSON ボディとして返し**（`quota` は含めない）、`record_api_call` も呼ばない。既存 `verify_api_key`（`/summary` 用、403）は従来通りの整形を維持
+    - **`SearchHTTPException` 専用ハンドラ**（実装最終形。当初案では `@app.exception_handler(HTTPException)` グローバル登録 + `detail` が dict なら body 直接返却としていたが、Phase 4 専門家レビュー対応で **`SearchHTTPException(HTTPException)` サブクラス + 専用ハンドラ** に変更し、スコープを `/search` だけに閉じた。これにより既存 `/summary` の `HTTPException(detail=str, 403)` および将来 endpoint の `HTTPException(detail=dict)` は FastAPI 標準ハンドラの `{"detail": ...}` 形式に維持される。design.md §6.2 の差分表参照）。`SearchHTTPException` の `detail`（dict）を **そのまま JSON ボディとして返し**、`quota` は含めず、`record_api_call` も呼ばない
     - **`record_api_call` はグローバル例外ハンドラからは呼ばない**（router の `try/finally` で一元記録するため、二重 INSERT を防ぐ）
     - **router を通らない予期せぬ例外**（依存関係解決中の例外など）は既存の `generic_exception_handler` がカバー。これらは `api_calls` に記録されないが、認証通過前ケースと同じ扱いで運用上問題なし
     - _要件: 受け入れ基準 #1, #3, #8, #15、設計書 §6.2, FR-5, FR-9_
-  - [ ] 12.4 テスト実行 → **全件成功（GREEN）** を確認
+  - [x] 12.4 テスト実行 → **全件成功（GREEN）** を確認
     - `pytest tests/test_search_endpoint.py -v`
+    - **実績**: ST-1〜ST-9 の **9 件 PASS**。既存 97 件 + Phase 1〜3 累計 96 件 + Phase 4 9 件 = **全 202 件 PASS**（回帰なし）
+    - **設計差分（実装後追記）**: design.md §3.6 / tasks.md 12.1 の擬似コードでは `await asyncio.to_thread(search_videos, body)` でサービス層を呼び出していたが、`asyncio.to_thread` は呼び出し時点のコンテキストを **コピー** して別スレッドで実行する。`quota_tracker.add_units` が ContextVar (`_request_cost`) に書き込んでも router 側コルーチンに伝播せず `last_call_cost == 0` のままになる問題があったため、**`search_videos(body)` を同コルーチン上で同期呼び出し** する形に変更した。サーバが単一プロセス・単一ワーカ運用 (FR-7) で /search の想定 latency も短いため、イベントループの一時的ブロックよりも ContextVar 整合（受け入れ基準 #8 の `last_call_cost`）を優先する判断。Phase 5 の `/summary` 改造でも同方針を踏襲する見込み
 
 ## Phase 5: /summary への quota 注入 + 既存回帰
 

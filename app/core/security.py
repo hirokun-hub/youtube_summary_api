@@ -12,6 +12,8 @@ import logging
 from fastapi import HTTPException, Security
 from fastapi.security import APIKeyHeader
 
+from app.core.constants import ERROR_UNAUTHORIZED, MSG_UNAUTHORIZED
+
 # このモジュール用のロガーを設定
 logger = logging.getLogger(__name__)
 
@@ -73,3 +75,53 @@ async def verify_api_key(api_key_header: str = Security(API_KEY_HEADER)):
             status_code=403,
             detail="Could not validate credentials",
         )
+
+
+class SearchHTTPException(HTTPException):
+    """`/search` 専用の HTTPException サブクラス。
+
+    `detail` に dict を含み、レスポンスボディとしてその内容を **そのまま JSON 本体**
+    として返すために独立した型として宣言する。**専用ハンドラ** (main.py の
+    `search_http_exception_handler`) で処理することで、グローバル `HTTPException`
+    ハンドラの挙動を上書きする副作用が他エンドポイントに波及するのを防ぐ
+    （既存 `/summary` の `HTTPException(detail=str)` は FastAPI 標準ハンドラで
+    `{"detail": "..."}` 形式に整形され続ける）。
+    """
+
+
+async def verify_api_key_for_search(
+    api_key_header: str = Security(API_KEY_HEADER),
+) -> str:
+    """`/search` 専用の認証依存。
+
+    既存 `verify_api_key`（403 を投げる）と並走させる。`/search` は AI エージェント /
+    LLM Tool 消費前提のため、認証エラー時は LLM Tool SDK の自動リトライ分岐に
+    沿った **HTTP 401** を返す（`/summary` の 403 互換は `verify_api_key` 側で維持）。
+
+    `SearchHTTPException(detail=dict)` を投げ、main.py の専用ハンドラで `detail`
+    を JSON 本体としてそのまま返すことで FR-4 / FR-5 の 401 レスポンス契約を満たす
+    （quota は含めない）。グローバル `HTTPException` ハンドラには干渉しない。
+    """
+    if not API_KEY:
+        logger.critical(
+            "APIキーがサーバーに設定されていないため、/search リクエストを処理できません。"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="サーバー側の設定エラーです。管理者に連絡してください。",
+        )
+
+    if not api_key_header or not secrets.compare_digest(api_key_header, API_KEY):
+        logger.warning("/search に無効または欠落した X-API-KEY が提供されました。")
+        raise SearchHTTPException(
+            status_code=401,
+            detail={
+                "success": False,
+                "status": "error",
+                "error_code": ERROR_UNAUTHORIZED,
+                "message": MSG_UNAUTHORIZED,
+                "query": None,
+                "results": None,
+            },
+        )
+    return api_key_header

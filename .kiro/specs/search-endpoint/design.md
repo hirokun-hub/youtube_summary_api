@@ -693,14 +693,13 @@ def _classify_search_api_error(status_code: int, error_body: dict | None) -> str
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 
-from app.core import quota_tracker
-from app.core.async_rate_limiter import search_rate_limiter
+from app.core import async_rate_limiter, quota_tracker
 from app.core.constants import (
-    ERROR_CLIENT_RATE_LIMITED, ERROR_QUOTA_EXCEEDED,
-    MSG_SEARCH_CLIENT_RATE_LIMITED_TEMPLATE, MSG_QUOTA_EXCEEDED_TEMPLATE,
-    SEARCH_RATE_LIMIT_MAX_REQUESTS, SEARCH_RATE_LIMIT_WINDOW_SECONDS,
+    ERROR_CLIENT_RATE_LIMITED, ERROR_INTERNAL, ERROR_QUOTA_EXCEEDED,
+    ERROR_RATE_LIMITED, MSG_INTERNAL_ERROR, MSG_QUOTA_EXCEEDED_TEMPLATE,
 )
 from app.core.security import verify_api_key_for_search
 from app.models.schemas import SearchRequest, SearchResponse
@@ -710,12 +709,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["Search"])
 
 
-@router.post("/search", response_model=SearchResponse)
+@router.post("/search")
 async def search(
-    request: Request,
     body: SearchRequest,
     _: str = Depends(verify_api_key_for_search),
-) -> SearchResponse:
+):
     """
     検索フローの責務:
     0. **`quota_tracker.reset_request_cost()`** で当該リクエストの ContextVar 累計を 0 に
@@ -725,10 +723,26 @@ async def search(
        （こちらも API 未呼び出しなので `last_call_cost == 0`）
     3. サービス層に委譲（内部で search.list 100 + videos.list 1 + channels.list 1 = 102 を
        `add_units` 経由で ContextVar に積む）
-    4. レスポンスに quota を同梱: `last_call_cost = quota_tracker.get_request_cost()`
-       （成功時は典型値 102、サービス層途中失敗時は実消費分 = 100 など）
+    4. **try / except / finally で実装**: finally 句で `quota_tracker.record_api_call(endpoint='search', ...)`
+       を 1 回呼び、認証通過後の全結果（200 / 429 / 503 / 500）を `api_calls` に記録（受け入れ基準 #15）
+    5. レスポンスに quota を同梱: `response.model_copy(update={"quota": snap})`
+       （`SearchResponse.frozen=True` のため直接代入不可）→ `JSONResponse` で
+       HTTP ステータス・Retry-After ヘッダ付きで返却
     """
 ```
+
+#### Phase 4 実装結果との差分（実装後追記）
+
+設計時の擬似コードと最終実装に以下の差分がある（いずれも tasks.md Phase 4 / Phase 4 専門家レビュー対応で適用）:
+
+| 設計時 | 実装後 | 理由 |
+|---|---|---|
+| `@router.post("/search", response_model=SearchResponse)` | **`@router.post("/search")`**（`response_model` 指定なし） | HTTP ステータスを経路ごとに切り替えるため `JSONResponse` を直接返す。`response_model` を付けると FastAPI が SearchResponse へ変換してしまい、status_code / Retry-After ヘッダを上書きできない |
+| `async def search(request: Request, body, _: str = Depends(...)) -> SearchResponse` | **`async def search(body, _: str = Depends(...))`**（`request: Request` / 戻り値型注釈なし） | `request` は本実装で参照不要。戻り値は `JSONResponse` 直接返却のため型注釈を付けない |
+| `response = await asyncio.to_thread(search_videos, body)` | **`response = search_videos(body)`**（同期呼び出し） | `asyncio.to_thread` は呼び出し時点の context を **コピー** して別スレッドで実行するため、サブ呼び出しが ContextVar (`_request_cost`) に書き込んでも router 側コルーチンに伝播せず `last_call_cost == 0` のままになる。受け入れ基準 #8 の `last_call_cost` 整合性を優先し、単一プロセス・単一ワーカ運用 (FR-7) で /search の想定 latency が短いことから同期呼び出しを採用。Phase 5 の `/summary` 改造でも同方針を踏襲する |
+| （未明記） | **`try / except / finally`** で `quota_tracker.record_api_call(endpoint='search', ...)` を **router の finally で 1 回呼ぶ** | 認証通過後の全結果（200 / 429 / 503 / 500、router 内予期せぬ例外も含む）を 1 箇所で記録するため（受け入れ基準 #15）。グローバル例外ハンドラからは `record_api_call` を呼ばず、二重 INSERT を防ぐ |
+| （未明記） | **`response.model_copy(update={"quota": snap})`** で quota を注入 | `SearchResponse.frozen=True` のため `response.quota = ...` 直接代入は ValidationError。`model_copy` の `update` 引数経由で frozen モデルを安全に更新する |
+| `_map_response_to_http(response)` | **`_map_to_http(response) -> tuple[int, dict[str, str]]`** | 命名のみの差（機能同等）。error_code → (HTTP status, headers) のマップを 1 関数に集約 |
 
 ### 3.7 既存ファイルへの変更
 
@@ -1162,19 +1176,59 @@ def _error_response(
 
 **注意**: `quota is None` のときは `"quota": None` を出すのではなく **キー自体を省略**する。これにより 401 のレスポンス JSON に `quota` フィールドが現れない（ST-2「`quota` フィールドなし」期待値と整合）。401 で本関数を呼び出す際は `quota=None` を渡す。
 
-`401` は **`/search` 専用の `verify_api_key_for_search`** 内で `HTTPException(401, MSG_UNAUTHORIZED)` を投げ、グローバル handler で上記形式に整形する（ただし `quota=None`）。**既存 `verify_api_key`（403 を返す）は変更せず、`/summary` の認証エラー挙動を維持する。** `422` は FastAPI 標準（`{"detail": [...]}`）をそのまま使う（`quota` 含めない）。
+`401` は **`/search` 専用の `verify_api_key_for_search`** 内で `SearchHTTPException(401, detail=dict)` を投げ、専用ハンドラで `detail` を JSON 本体としてそのまま返す。**既存 `verify_api_key`（403 を返す）は変更せず、`/summary` の認証エラー挙動を維持する。** `422` は FastAPI 標準（`{"detail": [...]}`）をそのまま使う（`quota` 含めない）。
 
-#### 新規 `verify_api_key_for_search` の最小実装雛形
+#### Phase 4 実装結果との差分（実装後追記）
+
+設計時の擬似コードと最終実装に以下の差分がある（Phase 4 専門家レビュー対応で適用）:
+
+| 設計時 | 実装後 | 理由 |
+|---|---|---|
+| `HTTPException(401, MSG_UNAUTHORIZED)`（`detail=str`） | **`SearchHTTPException(401, detail=dict)`**（`SearchHTTPException(HTTPException)` サブクラス、`detail` に `success/status/error_code/message/query/results` 6 キー dict） | グローバル `HTTPException` ハンドラで「detail が dict なら body 直接返却」とする方式は、既存 `/summary` および将来 endpoint が `HTTPException(detail=dict)` を投げた場合に **FastAPI 標準 `{"detail": ...}` 形式から外れる副作用** がある。Phase 4 専門家レビュー（2026-04-26）で指摘され、`SearchHTTPException` 専用クラス + 専用ハンドラで `/search` だけにスコープを閉じる形に変更 |
+| グローバル `@app.exception_handler(HTTPException)` で `detail` の型に応じて分岐 | **`@app.exception_handler(SearchHTTPException)`** に限定（`HTTPException` 親クラスは FastAPI 標準ハンドラのまま） | 上記理由。既存 `/summary` の `verify_api_key`（`HTTPException(403, "API key is missing")`）は標準ハンドラで `{"detail": "API key is missing"}` 形式を保つ。ST-2 で 401 dict 形式、E-2 で 403 標準形式の両方が PASS することを検証済み |
+| 共通 `_error_response(http_status, error_code, message, quota, retry_after)` ヘルパで JSONResponse を組み立て | **router 内で `SearchResponse(success=False, ...)` を構築** → `model_copy(update={"quota": snap})` で quota 同梱 → `JSONResponse(content=response.model_dump(mode="json"), status_code=..., headers=...)` で返却 | `quota` キー欠落契約（401/422 に quota を含めない）は SearchResponse の `Optional[Quota] = None` + `model_dump(exclude_none=True)` で代替実現できるが、Phase 4 では SearchResponse を経由しない 401（SearchHTTPException ハンドラで直接 dict 返却）と、quota 同梱が必須な認証通過後経路（200/429/503/500）が完全に分離されているため、`_error_response` ヘルパを介在させる必要がなくなった |
+
+#### 新規 `verify_api_key_for_search` の実装（最終形）
 
 ```python
 # app/core/security.py に追記（既存 verify_api_key は無変更）
+
+class SearchHTTPException(HTTPException):
+    """`/search` 専用の HTTPException サブクラス。detail に dict を含み、
+    レスポンスボディとして dict 内容をそのまま返すために独立した型として宣言する。
+    main.py の専用ハンドラで処理することで、グローバル HTTPException ハンドラ
+    の挙動を上書きする副作用が他エンドポイントに波及するのを防ぐ。
+    """
+
+
 async def verify_api_key_for_search(api_key_header: str = Security(API_KEY_HEADER)) -> str:
     """/search 専用: 認証エラー時に 401 を返す（既存 /summary は 403 のまま）。"""
     if not API_KEY:
         raise HTTPException(status_code=500, detail="サーバー側の設定エラーです。")
     if not api_key_header or not secrets.compare_digest(api_key_header, API_KEY):
-        raise HTTPException(status_code=401, detail=MSG_UNAUTHORIZED)
+        raise SearchHTTPException(
+            status_code=401,
+            detail={
+                "success": False,
+                "status": "error",
+                "error_code": ERROR_UNAUTHORIZED,
+                "message": MSG_UNAUTHORIZED,
+                "query": None,
+                "results": None,
+            },
+        )
     return api_key_header
+```
+
+#### main.py 側の専用ハンドラ（最終形）
+
+```python
+@app.exception_handler(SearchHTTPException)
+async def search_http_exception_handler(request: Request, exc: SearchHTTPException):
+    """detail (dict) を JSON 本体としてそのまま返す。スコープは SearchHTTPException のみ。"""
+    return JSONResponse(
+        status_code=exc.status_code, content=exc.detail, headers=exc.headers or None
+    )
 ```
 
 ### 6.3 `/summary` は 200 固定
