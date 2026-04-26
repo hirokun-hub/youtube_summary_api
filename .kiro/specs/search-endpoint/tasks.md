@@ -395,42 +395,63 @@
 
 ## Phase 7: 本番上書き
 
-- [ ] 19. staging を停止する
-  - [ ] 19.1 `docker compose -f compose.staging.yml down`
-  - [ ] 19.2 `docker ps` で `youtube-api-fastapi-staging` が消えていることを確認
+- [x] 19. staging を停止する
+  - [x] 19.1 `docker compose -f compose.staging.yml down`
+  - [x] 19.2 `docker ps` で `youtube-api-fastapi-staging` が消えていることを確認
+  - **実績**: staging container / network すべて removed、本番 `youtube-api-fastapi`（:10000）のみ稼働
 
-- [ ] 20. 本番 compose に追加要素を反映する
-  - [ ] 20.1 `docker-compose.yml` に `volumes` を追加する
+- [x] 20. 本番 compose に追加要素を反映する
+  - [x] 20.1 `docker-compose.yml` に `volumes` を追加する
     - `volumes: ./data/usage:/app/data/usage`（SQLite 永続化）
     - ポートは `:10000` のまま、container_name も既存 `youtube-api-fastapi` のまま
     - _要件: 受け入れ基準 #15_
-  - [ ] 20.2 本番再ビルド・再起動する
+  - [x] 20.2 本番再ビルド・再起動する
     - `docker compose build api`
     - `docker compose up -d`（既存コンテナを置換）
     - `docker logs youtube-api-fastapi --tail 50` で起動エラーがないこと、`quota_tracker を初期化しました（DB: data/usage/usage.db, consumed_units_today: ...）` の起動ログが出ていることを確認（実装では `init()` 1 関数に集約されており、`init_db()` / `restore_from_db()` という分離関数は存在しない）
+    - **実績**: 起動ログに `quota_tracker を初期化しました（DB: data/usage/usage.db, consumed_units_today: 1226）` を確認 → host 側 SQLite から SUM 復元成功（staging 検証時の累積値を引き継いだ）。エラーログなし
 
-- [ ] 21. 本番動作確認
-  - [ ] 21.1 既存 `/summary` の後方互換確認
+- [x] 21. 本番動作確認
+  - [x] 21.1 既存 `/summary` の後方互換確認
     - iPhone ショートカットからリクエストし、既存 22 フィールド（`success` / `status` / `message` / `transcript` 等）が **完全に同一形式** で返ることを確認
     - 新規 `quota` オブジェクトが追加されていることを確認（iPhone ショートカットは未知フィールドを無視するため非破壊）
     - _要件: 受け入れ基準 #17、要件定義書「最重要方針: 既存機能の後方互換維持」_
-  - [ ] 21.2 新規 `/search` の動作確認
+    - **実績**: `dQw4w9WgXcQ` への curl で `HTTP 200, success=True, transcript_length=1422` を取得し、既存 22 フィールド全存在 + 追加フィールドは `quota` のみであることを確認。consumed_units_today: 1226 → 1228 (+2)
+    - **iPhone ショートカット実機確認**: ユーザー側で別途実施（Claude では実機操作不可）
+  - [x] 21.2 新規 `/search` の動作確認
     - Tailscale 経由で `:10000` の `/api/v1/search` を叩き、200 と 401/422/429 のサンプルを取得
     - レスポンスの `quota.reset_in_seconds` が現在時刻と PT 0:00 の差として整合すること
     - _要件: 受け入れ基準 #1〜#10_
+    - **実績**: ローカル経由で 200 / 401 / 422 を取得（429 は Phase 6 17.2 で実証済み、二重消費を避けて skip）。200 で `consumed_units_today=1330, last_call_cost=102, reset_in_seconds=18324` を取得し、`reset_at_utc=2026-04-26T07:00:00Z` (= PT 0:00) との差 5h05m と整合確認。Tailnet 経路の到達性は Phase 6 17.4 (Mac→`100.115.195.61:10001`) で実証済み（同一ホスト/プロセス構成）
 
-- [ ] 22. ドキュメント反映
-  - [ ] 22.1 `CLAUDE.md` の `Architecture` セクションを更新する
+- [x] 22. ドキュメント反映
+  - [x] 22.1 `CLAUDE.md` の `Architecture` セクションを更新する
     - `app/routers/search.py` を追加
     - `app/core/quota_tracker.py` を追加
     - `app/core/async_rate_limiter.py` を追加
     - `app/services/youtube_search.py` を追加
     - エラーコードが 7 種 → 9 種（`QUOTA_EXCEEDED`, `UNAUTHORIZED` 追加）に更新
     - _要件: なし（運用ドキュメント整備）_
-  - [ ] 22.2 受け入れ基準のチェックリストを `requirements.md` で確認する
+    - **実績**: 上記 4 ファイル + `app/core/rate_limiter.py`（既存）+ `data/usage/usage.db` を Architecture セクションに追加、エラーコード 9 種を列挙
+  - [x] 22.2 受け入れ基準のチェックリストを `requirements.md` で確認する
     - MVP #1〜#18 を順にチェックし、完了マーク
     - Phase 2（#19/#20/#21）は次フェーズで対応する旨を明記
     - _要件: 受け入れ基準 #1〜#18_
+    - **実績**: requirements.md L640-657 の MVP #1〜#18 すべて満たすことを Phase 6/7 の実検証で確認:
+      - #1, #3 (認証/422): 21.2 で確認
+      - #2, #5, #6, #7 (50件/has_caption/transcript除外/派生値): 17.2 で確認
+      - #8 (quota 同梱): 17.2/17.3/21.1/21.2 で全パス確認
+      - #9 (60s/11req): 17.2 で確認
+      - #10 (QUOTA_EXCEEDED): ST-6/ST-7 単体テストでカバー
+      - #11 (PT 0:00 reset): SQ-4 単体テストでカバー
+      - #12 (asyncio.Lock): 実装コードで確認
+      - #13 (PRAGMA): 18.1 で `PRAGMA journal_mode=wal` 確認
+      - #14 (SUM 復元): 18.1 + 20.2 で `consumed_units_today: 1226` 復元確認
+      - #15 (api_calls 全記録): 18.1 で 14 行（search 13 + summary 1）確認
+      - #16 (.gitignore): `git check-ignore -v` で `data/usage/*` 適用確認
+      - #17 (既存 97 件 PASS): pytest 207 件全 PASS で回帰 0
+      - #18 (新規テスト全モック): pytest -v で外部通信ゼロ
+    - Phase 2 (#19-21) は requirements.md 内で `📅` マーク付き、後続フェーズ予定として既に明記済み
 
 ---
 
