@@ -1,0 +1,34 @@
+# Staging 用 Docker Compose 設定
+# 本番 docker-compose.yml (`:10000`) と並走させて検証するための仮運用構成。
+#
+# 使用方法:
+#   起動: docker compose -f compose.staging.yml up -d
+#   停止: docker compose -f compose.staging.yml down
+#   ログ確認: docker compose -f compose.staging.yml logs -f
+#
+# 差分（本番との違い）:
+#   - name: youtube-api-staging（本番プロジェクト youtube_summary_api と分離。
+#     これがないと service 名が同じ "api" のため、本番コンテナを recreate してしまう）
+#   - container_name: youtube-api-fastapi-staging（本番と衝突しない名前）
+#   - ports: ホスト側 10001（本番 10000 と並走可能）
+#   - volumes: data/usage を bind mount し SQLite (usage.db) をホスト側に永続化
+#   - env_file は本番と同一 (.env / .env.local)
+
+name: youtube-api-staging
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: youtube-api-fastapi-staging
+    ports:
+      - "0.0.0.0:10001:10000"
+    env_file:
+      - path: ./.env
+        required: true
+      - path: ./.env.local
+        required: false
+    volumes:
+      - ./data/usage:/app/data/usage
+    restart: unless-stopped

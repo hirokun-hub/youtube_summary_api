@@ -21,4 +21,6 @@ services:
         required: true
       - path: ./.env.local
         required: false
+    volumes:
+      - ./data/usage:/app/data/usage
     restart: unless-stopped

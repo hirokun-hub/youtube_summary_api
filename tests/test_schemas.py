@@ -5,7 +5,7 @@ from app.models.schemas import SummaryResponse
 
 # S-1: 全フィールドが定義されていること
 def test_s1_all_fields_defined():
-    """SummaryResponse に既存5フィールド + 新規16フィールドが存在する"""
+    """SummaryResponse に既存5フィールド + 新規17フィールドが存在する"""
     model_fields = set(SummaryResponse.model_fields.keys())
     computed_fields = set(SummaryResponse.model_computed_fields.keys())
     all_fields = model_fields | computed_fields
@@ -34,9 +34,12 @@ def test_s1_all_fields_defined():
     assert "webpage_url" in all_fields
     assert "transcript_language" in all_fields
     assert "is_generated" in all_fields
+    assert "retry_after" in all_fields
+    # /search エンドポイント追加に伴うクォータ同梱フィールド（既存挙動への影響なし）
+    assert "quota" in all_fields
 
-    # 合計 21 フィールド
-    assert len(all_fields) == 21
+    # 合計 23 フィールド（既存 22 + quota 1）
+    assert len(all_fields) == 23
 
 
 # S-2: 成功レスポンスの生成

@@ -23,19 +23,40 @@ load_dotenv(dotenv_path=env_local_path, override=True)
 
 
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 # --- アプリケーション内モジュールのインポート ---
 # core/logging_config.py からロギング設定関数をインポート
 from app.core.logging_config import setup_logging
+# クォータ追跡（SQLite 永続化）。startup イベントで init を呼ぶ
+from app.core import quota_tracker
+from app.core.constants import USAGE_DB_PATH
+from app.core.security import SearchHTTPException
 # routers/summary.py からAPIルーターをインポート
 from app.routers import summary as summary_router
+from app.routers import search as search_router
 
 # --- ロギングのセットアップ ---
 # アプリケーション起動時に一度だけロギング設定を呼び出す
 setup_logging()
 logger = logging.getLogger(__name__)
+
+
+# --- アプリケーションライフサイクル: 起動時にクォータ追跡を初期化 ---
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """SQLite (data/usage/usage.db) を初期化し、起動時 SUM 復元を行う。"""
+    db_path = Path(USAGE_DB_PATH)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    quota_tracker.init(db_path)
+    logger.info(
+        "quota_tracker を初期化しました（DB: %s, consumed_units_today: %d）",
+        db_path,
+        quota_tracker.get_snapshot().consumed_units_today,
+    )
+    yield
 
 
 # --- FastAPIアプリケーションのインスタンス化 ---
@@ -44,9 +65,31 @@ app = FastAPI(
     title="YouTube Summary API",
     description="YouTube動画のメタデータと文字起こしを取得するためのAPIです。",
     version="1.1.0",
+    lifespan=_lifespan,
 )
 
 # --- グローバル例外ハンドラの登録 ---
+@app.exception_handler(SearchHTTPException)
+async def search_http_exception_handler(
+    request: Request, exc: SearchHTTPException
+):
+    """`/search` 専用 `HTTPException` を JSON ボディに整形するハンドラ。
+
+    `detail` (dict) を **そのまま JSON 本体** として返す。要件 FR-4 / FR-5 の
+    401 レスポンス契約 (`{"success": False, "error_code": "UNAUTHORIZED", ...}`) を満たす。
+
+    **スコープ**: `SearchHTTPException` のみを対象とする。これにより、既存
+    `/summary` の `verify_api_key` (`HTTPException(detail=str)` で 403) や、将来
+    別 endpoint が `HTTPException(detail=dict)` を投げるケースは FastAPI 標準
+    ハンドラ (`{"detail": ...}` 形式) で従来どおり処理される。Phase 4 専門家
+    レビュー対応 (2026-04-26): グローバル `HTTPException` 上書きから限定スコープへ移行。
+    """
+    headers = exc.headers or None
+    return JSONResponse(
+        status_code=exc.status_code, content=exc.detail, headers=headers
+    )
+
+
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
     """
@@ -55,7 +98,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
     """
     # エラーの詳細（スタックトレースを含む）をログに出力
     logger.error(f"リクエスト処理中にハンドルされていない例外が発生しました: {exc}", exc_info=True)
-    
+
     # クライアントには汎用的なエラーメッセージを返す
     return JSONResponse(
         status_code=500,
@@ -68,6 +111,8 @@ logger.debug("APIルーターを登録します。")
 # summary_router.router をアプリケーションに含める
 # これにより、/api/v1/summary エンドポイントが利用可能になる
 app.include_router(summary_router.router)
+# /api/v1/search エンドポイントを有効化
+app.include_router(search_router.router)
 
 
 # --- ルートエンドポイントの定義 ---

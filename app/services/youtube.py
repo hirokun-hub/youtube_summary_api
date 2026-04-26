@@ -22,6 +22,7 @@ from youtube_transcript_api import (
 )
 
 from app.models.schemas import SummaryResponse
+from app.core import quota_tracker
 from app.core.constants import (
     ERROR_CODE_TO_MESSAGE,
     ERROR_INTERNAL,
@@ -39,6 +40,8 @@ from app.core.constants import (
     MSG_VIDEO_NOT_FOUND,
     OEMBED_TIMEOUT_SECONDS,
     OEMBED_URL_TEMPLATE,
+    QUOTA_COST_CHANNELS_LIST,
+    QUOTA_COST_VIDEOS_LIST,
     TRANSCRIPT_LANGUAGES,
     YOUTUBE_API_V3_CHANNELS_PART,
     YOUTUBE_API_V3_CHANNELS_URL,
@@ -291,6 +294,9 @@ def _fetch_metadata_youtube_api(video_id: str) -> FetchMetadataResult:
     if videos_result.is_retryable_failure:
         return FetchMetadataResult(metadata=None, error_code=None, should_fallback=True)
 
+    # videos.list 成功 → quota 計上（in-memory + quota_state + ContextVar）
+    quota_tracker.add_units(QUOTA_COST_VIDEOS_LIST)
+
     items = (videos_result.data or {}).get("items", [])
     if not items:
         return FetchMetadataResult(metadata=None, error_code=ERROR_VIDEO_NOT_FOUND, should_fallback=False)
@@ -309,6 +315,8 @@ def _fetch_metadata_youtube_api(video_id: str) -> FetchMetadataResult:
             },
         )
         if channels_result.data:
+            # channels.list 成功 → quota 計上
+            quota_tracker.add_units(QUOTA_COST_CHANNELS_LIST)
             channel_items = channels_result.data.get("items", [])
             channel_data = channel_items[0] if channel_items else None
 
