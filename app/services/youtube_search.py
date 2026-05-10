@@ -254,11 +254,34 @@ def _handle_call_error(
     return _failure_response(error_code, query, retry_after)
 
 
+def _compute_region_blocked_countries(content_details: dict) -> list[str] | None:
+    """contentDetails.regionRestriction から JP 視聴 block 判定用の国コード配列を返す。
+
+    - `regionRestriction.blocked` が list なら、その list 内の str 要素のみ抜粋して返す
+    - `regionRestriction.allowed` 形式は **未対応**（None フォールバック）。
+      理由: ISO 3166-1 alpha-2 全集合の hard-code を本サーバ側で抱えたくない。
+      クライアント側で「allowed に JP が含まれない = block」と判定する必要があるが、
+      その意味解釈はクライアント責務とし、サーバは生 blocked 配列の有無のみ伝える。
+    - 想定外の型（regionRestriction が dict でない 等）は None。
+    """
+    rr = content_details.get("regionRestriction")
+    if not isinstance(rr, dict):
+        return None
+    blocked = rr.get("blocked")
+    if isinstance(blocked, list):
+        cleaned = [c for c in blocked if isinstance(c, str)]
+        return cleaned
+    return None
+
+
 def _build_search_result(video_item: dict, channels_by_id: dict[str, dict]) -> SearchResult:
     """videos.list 1 件と channels.list dict から SearchResult を組み立てる。"""
     snippet = video_item.get("snippet") or {}
     content_details = video_item.get("contentDetails") or {}
     statistics = video_item.get("statistics") or {}
+    status = video_item.get("status") or {}
+    topic_details = video_item.get("topicDetails") or {}
+    paid_pp = video_item.get("paidProductPlacementDetails") or {}
 
     channel_id = snippet.get("channelId") or ""
     channel_item = channels_by_id.get(channel_id) or {}
@@ -304,6 +327,25 @@ def _build_search_result(video_item: dict, channels_by_id: dict[str, dict]) -> S
 
     video_id = video_item.get("id") or ""
 
+    # videos.list 強化シグナル（型を bool/list[str] 以外なら None に倒す）
+    made_for_kids_raw = status.get("madeForKids")
+    made_for_kids = made_for_kids_raw if isinstance(made_for_kids_raw, bool) else None
+    contains_synthetic_raw = status.get("containsSyntheticMedia")
+    contains_synthetic_media = (
+        contains_synthetic_raw if isinstance(contains_synthetic_raw, bool) else None
+    )
+    paid_pp_raw = paid_pp.get("hasPaidProductPlacement")
+    has_paid_product_placement = paid_pp_raw if isinstance(paid_pp_raw, bool) else None
+    licensed_raw = content_details.get("licensedContent")
+    licensed_content = licensed_raw if isinstance(licensed_raw, bool) else None
+    topic_categories_raw = topic_details.get("topicCategories")
+    topic_categories = (
+        [c for c in topic_categories_raw if isinstance(c, str)]
+        if isinstance(topic_categories_raw, list)
+        else None
+    )
+    region_blocked_countries = _compute_region_blocked_countries(content_details)
+
     return SearchResult(
         video_id=video_id,
         title=snippet.get("title") or "",
@@ -329,6 +371,12 @@ def _build_search_result(video_item: dict, channels_by_id: dict[str, dict]) -> S
         channel_total_view_count=channel_total_view_count,
         channel_created_at=channel_created_at,
         channel_avg_views=channel_avg_views,
+        made_for_kids=made_for_kids,
+        contains_synthetic_media=contains_synthetic_media,
+        has_paid_product_placement=has_paid_product_placement,
+        licensed_content=licensed_content,
+        topic_categories=topic_categories,
+        region_blocked_countries=region_blocked_countries,
     )
 
 

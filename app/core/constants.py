@@ -29,7 +29,7 @@ OEMBED_TIMEOUT_SECONDS = 10
 YOUTUBE_API_V3_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
 YOUTUBE_API_V3_CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
 YOUTUBE_API_V3_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
-YOUTUBE_API_V3_VIDEOS_PART = "snippet,contentDetails,statistics"
+YOUTUBE_API_V3_VIDEOS_PART = "snippet,contentDetails,statistics,status,topicDetails,paidProductPlacementDetails"
 # channel_created_at（snippet.publishedAt）を取得するため snippet を含める
 YOUTUBE_API_V3_CHANNELS_PART = "snippet,statistics"
 YOUTUBE_API_V3_SEARCH_PART = "snippet"
