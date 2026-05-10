@@ -29,6 +29,7 @@ from app.core.constants import (
     YOUTUBE_API_V3_SEARCH_PART,
     YOUTUBE_API_V3_SEARCH_TYPE,
     YOUTUBE_API_V3_SEARCH_URL,
+    YOUTUBE_API_V3_VIDEOS_PART,
     YOUTUBE_API_V3_VIDEOS_URL,
 )
 from app.models.schemas import SearchRequest
@@ -70,6 +71,12 @@ def _video_item(
     caption: str = "true",
     duration: str = "PT5M",
     definition: str = "hd",
+    *,
+    status: dict | None = None,
+    topic_details: dict | None = None,
+    paid_product_placement: dict | None = None,
+    licensed_content: bool | None = None,
+    region_restriction: dict | None = None,
 ) -> dict:
     """videos.list の items 1 件分。"""
     statistics: dict = {}
@@ -79,7 +86,16 @@ def _video_item(
         statistics["likeCount"] = like
     if comment is not None:
         statistics["commentCount"] = comment
-    return {
+    content_details: dict = {
+        "duration": duration,
+        "definition": definition,
+        "caption": caption,
+    }
+    if licensed_content is not None:
+        content_details["licensedContent"] = licensed_content
+    if region_restriction is not None:
+        content_details["regionRestriction"] = region_restriction
+    item: dict = {
         "id": video_id,
         "snippet": {
             "publishedAt": "2026-04-01T10:00:00Z",
@@ -94,13 +110,16 @@ def _video_item(
             "tags": ["t1"],
             "categoryId": "27",
         },
-        "contentDetails": {
-            "duration": duration,
-            "definition": definition,
-            "caption": caption,
-        },
+        "contentDetails": content_details,
         "statistics": statistics,
     }
+    if status is not None:
+        item["status"] = status
+    if topic_details is not None:
+        item["topicDetails"] = topic_details
+    if paid_product_placement is not None:
+        item["paidProductPlacementDetails"] = paid_product_placement
+    return item
 
 
 def _channel_item(
@@ -667,3 +686,140 @@ def test_ss_search_list_search_item_id_not_dict_returns_internal(mock_quota, moc
 
     assert resp.success is False
     assert resp.error_code == ERROR_INTERNAL
+
+
+# =============================================
+# SS-13a〜f: videos.list 強化シグナル（status / topicDetails /
+# paidProductPlacementDetails / contentDetails.licensedContent /
+# regionRestriction）が SearchResult に正しくマッピングされる
+# =============================================
+
+def test_ss13a_all_parts_extracted_to_search_result(mock_quota, mock_session):
+    """全 part 揃った videos.list response → 6 フィールドが期待値で抽出される。"""
+    video = _video_item(
+        "v1",
+        status={
+            "madeForKids": True,
+            "containsSyntheticMedia": False,
+        },
+        topic_details={
+            "topicCategories": [
+                "https://en.wikipedia.org/wiki/Artificial_intelligence",
+                "https://en.wikipedia.org/wiki/Machine_learning",
+            ],
+        },
+        paid_product_placement={"hasPaidProductPlacement": True},
+        licensed_content=True,
+        region_restriction={"blocked": ["RU"]},
+    )
+    mock_session.side_effect = [
+        _mock_response(200, _search_body([_search_item("v1")])),
+        _mock_response(200, {"items": [video]}),
+        _mock_response(200, {"items": [_channel_item("c1")]}),
+    ]
+    from app.services.youtube_search import search_videos
+    resp = search_videos(SearchRequest(q="test"))
+
+    assert resp.success is True
+    assert resp.results is not None and len(resp.results) == 1
+    r = resp.results[0]
+    assert r.made_for_kids is True
+    assert r.contains_synthetic_media is False
+    assert r.has_paid_product_placement is True
+    assert r.licensed_content is True
+    assert r.topic_categories == [
+        "https://en.wikipedia.org/wiki/Artificial_intelligence",
+        "https://en.wikipedia.org/wiki/Machine_learning",
+    ]
+    assert r.region_blocked_countries == ["RU"]
+
+
+def test_ss13b_all_parts_missing_yields_none_fields(mock_quota, mock_session):
+    """parts 全欠落 response → 6 フィールド全部 None（既存呼び出しの後方互換）。"""
+    video = _video_item("v1")  # status / topicDetails / paidPP / licensedContent / regionRestriction なし
+    mock_session.side_effect = [
+        _mock_response(200, _search_body([_search_item("v1")])),
+        _mock_response(200, {"items": [video]}),
+        _mock_response(200, {"items": [_channel_item("c1")]}),
+    ]
+    from app.services.youtube_search import search_videos
+    resp = search_videos(SearchRequest(q="test"))
+
+    assert resp.success is True
+    assert resp.results is not None and len(resp.results) == 1
+    r = resp.results[0]
+    assert r.made_for_kids is None
+    assert r.contains_synthetic_media is None
+    assert r.has_paid_product_placement is None
+    assert r.licensed_content is None
+    assert r.topic_categories is None
+    assert r.region_blocked_countries is None
+
+
+def test_ss13c_region_restriction_blocked_extracted(mock_quota, mock_session):
+    """regionRestriction.blocked=["JP","CN"] → region_blocked_countries == ["JP","CN"]"""
+    video = _video_item("v1", region_restriction={"blocked": ["JP", "CN"]})
+    mock_session.side_effect = [
+        _mock_response(200, _search_body([_search_item("v1")])),
+        _mock_response(200, {"items": [video]}),
+        _mock_response(200, {"items": [_channel_item("c1")]}),
+    ]
+    from app.services.youtube_search import search_videos
+    resp = search_videos(SearchRequest(q="test"))
+
+    assert resp.success is True
+    assert resp.results is not None and len(resp.results) == 1
+    assert resp.results[0].region_blocked_countries == ["JP", "CN"]
+
+
+def test_ss13d_region_restriction_allowed_returns_none(mock_quota, mock_session):
+    """regionRestriction.allowed=["US"] → region_blocked_countries is None（allowed 形式は未対応フォールバック）"""
+    video = _video_item("v1", region_restriction={"allowed": ["US"]})
+    mock_session.side_effect = [
+        _mock_response(200, _search_body([_search_item("v1")])),
+        _mock_response(200, {"items": [video]}),
+        _mock_response(200, {"items": [_channel_item("c1")]}),
+    ]
+    from app.services.youtube_search import search_videos
+    resp = search_videos(SearchRequest(q="test"))
+
+    assert resp.success is True
+    assert resp.results is not None and len(resp.results) == 1
+    assert resp.results[0].region_blocked_countries is None
+
+
+def test_ss13e_region_restriction_invalid_type_returns_none(mock_quota, mock_session):
+    """regionRestriction が dict でない型 (str 等) → None"""
+    video = _video_item("v1", region_restriction="invalid")  # type: ignore[arg-type]
+    mock_session.side_effect = [
+        _mock_response(200, _search_body([_search_item("v1")])),
+        _mock_response(200, {"items": [video]}),
+        _mock_response(200, {"items": [_channel_item("c1")]}),
+    ]
+    from app.services.youtube_search import search_videos
+    resp = search_videos(SearchRequest(q="test"))
+
+    assert resp.success is True
+    assert resp.results is not None and len(resp.results) == 1
+    assert resp.results[0].region_blocked_countries is None
+
+
+def test_ss13f_videos_list_part_includes_new_parts(mock_quota, mock_session):
+    """videos.list 呼び出しの params["part"] が新定数値（3 part 追加済み）と一致する。"""
+    mock_session.side_effect = [
+        _mock_response(200, _search_body([_search_item("v1")])),
+        _mock_response(200, {"items": [_video_item("v1")]}),
+        _mock_response(200, {"items": [_channel_item("c1")]}),
+    ]
+    from app.services.youtube_search import search_videos
+    search_videos(SearchRequest(q="test"))
+
+    # 2 番目の call が videos.list（_classify_search_api_error / SS-1 と同じ順序前提）
+    videos_call = mock_session.call_args_list[1]
+    assert videos_call.args[0] == YOUTUBE_API_V3_VIDEOS_URL
+    part_value = videos_call.kwargs["params"]["part"]
+    assert part_value == YOUTUBE_API_V3_VIDEOS_PART
+    # 新規追加 3 part が含まれる
+    assert "status" in part_value.split(",")
+    assert "topicDetails" in part_value.split(",")
+    assert "paidProductPlacementDetails" in part_value.split(",")

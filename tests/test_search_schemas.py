@@ -312,6 +312,10 @@ def test_sr3_search_result_fields_present():
         "comment_count", "comment_view_ratio",
         "channel_follower_count", "channel_video_count",
         "channel_total_view_count", "channel_created_at", "channel_avg_views",
+        # videos.list 強化シグナル（status / topicDetails / paidProductPlacementDetails）
+        "made_for_kids", "contains_synthetic_media",
+        "has_paid_product_placement", "licensed_content",
+        "topic_categories", "region_blocked_countries",
     }
     assert expected.issubset(fields)
 
@@ -535,3 +539,36 @@ def test_sr7_summary_response_existing_fields_unchanged():
     assert fields["message"].annotation is str
     # status は computed_field
     assert "status" in SummaryResponse.model_computed_fields
+
+
+# --- SR-8: videos.list 強化シグナルの 6 フィールドが Optional default None ---
+
+def test_sr8_search_result_new_signal_fields_optional_default_none():
+    """status / topicDetails / paidProductPlacementDetails 由来の 6 フィールドは
+    すべて `is_required() == False`（Optional default None）であること。
+
+    既存 SearchResult に対する後方互換（古いクライアントが新フィールドを送らなくても valid）
+    を保証する。
+    """
+    fields = SearchResult.model_fields
+    new_fields = {
+        "made_for_kids",
+        "contains_synthetic_media",
+        "has_paid_product_placement",
+        "licensed_content",
+        "topic_categories",
+        "region_blocked_countries",
+    }
+    for name in new_fields:
+        assert name in fields, f"{name} が SearchResult.model_fields に存在しない"
+        assert fields[name].is_required() is False, (
+            f"{name} は Optional default None であるべき (is_required() == False)"
+        )
+        assert fields[name].default is None, (
+            f"{name} のデフォルト値は None であるべき"
+        )
+
+    # 実際にこれらを省略してもインスタンス化できる（既存ヘルパで生成される _make_search_result が成立済み）
+    result = _make_search_result()
+    for name in new_fields:
+        assert getattr(result, name) is None

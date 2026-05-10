@@ -183,6 +183,14 @@ class SearchResult(BaseModel):
     channel_created_at: Optional[str] = Field(None, description="チャンネル作成日（YYYY-MM-DD）")
     channel_avg_views: Optional[int] = Field(None, description="チャンネル動画あたり平均再生数")
 
+    # videos.list 強化シグナル（status / topicDetails / paidProductPlacementDetails）
+    made_for_kids: Optional[bool] = Field(None, description="子供向け指定 (status.madeForKids)")
+    contains_synthetic_media: Optional[bool] = Field(None, description="AI 生成コンテンツ自己申告 (status.containsSyntheticMedia, 2024 導入)")
+    has_paid_product_placement: Optional[bool] = Field(None, description="creator 申告の有料プロモ (paidProductPlacementDetails.hasPaidProductPlacement)")
+    licensed_content: Optional[bool] = Field(None, description="公式コンテンツパートナー (contentDetails.licensedContent)")
+    topic_categories: Optional[list[str]] = Field(None, description="Wikipedia URL 配列 (topicDetails.topicCategories) - 唯一性判定用")
+    region_blocked_countries: Optional[list[str]] = Field(None, description="視聴 block 国コード配列 (contentDetails.regionRestriction.blocked、allowed 形式は未対応で None)")
+
 
 class SearchResponse(BaseModel):
     """POST /api/v1/search レスポンス。"""
